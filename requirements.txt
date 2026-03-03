@@ -1,1 +1,3 @@
-flask\nrequests\ngunicorn
+flask
+requests
+gunicorn
