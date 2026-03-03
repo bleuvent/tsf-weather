@@ -3,29 +3,10 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-app = Flask(__name__)
+app = Flask(_name_)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
-
-def dict_to_xml(tag, d):
-    """Convierte diccionario a XML"""
-    elem = ET.Element(tag)
-    for key, val in d.items():
-        if isinstance(val, dict):
-            child = dict_to_xml(key, val)
-            elem.append(child)
-        elif isinstance(val, list):
-            for item in val:
-                child = dict_to_xml(key.replace('s', ''), item) if isinstance(item, dict) else ET.Element(key.replace('s', ''))
-                if not isinstance(item, dict):
-                    child.text = str(item)
-                elem.append(child)
-        else:
-            child = ET.Element(key)
-            child.text = str(val)
-            elem.append(child)
-    return elem
 
 # ============================================================
 # ENDPOINT 1: Búsqueda de ciudades por nombre (AUTOCOMPLETAR)
@@ -35,12 +16,10 @@ def search_cities():
     query = request.args.get('q', '')
     
     if not query or len(query) < 2:
-        # Respuesta vacía válida
         return Response('<?xml version="1.0"?><Locations></Locations>', 
                        mimetype='application/xml')
     
     try:
-        # Buscar en Open-Meteo Geocoding API
         params = {
             "name": query,
             "count": 10,
@@ -52,12 +31,11 @@ def search_cities():
         data = resp.json()
         results = data.get('results', [])
         
-        # Crear XML con múltiples ubicaciones
         root = ET.Element("Locations")
         
         for city in results:
             loc = ET.SubElement(root, "Location")
-            ET.SubElement(loc, "Key").text = f"{city.get('latitude')}_{city.get('longitude')}".replace('.', '_')
+            ET.SubElement(loc, "Key").text = f"{city.get('latitude')}{city.get('longitude')}".replace('.', '')
             ET.SubElement(loc, "LocalizedName").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "EnglishName").text = city.get('name', 'Unknown')
             
@@ -73,7 +51,6 @@ def search_cities():
         return Response(xml_str, mimetype='application/xml')
         
     except Exception as e:
-        # Respuesta vacía en caso de error
         return Response('<?xml version="1.0"?><Locations></Locations>', 
                        mimetype='application/xml')
 
@@ -90,7 +67,7 @@ def location_by_geo():
                        mimetype='application/xml')
     
     root = ET.Element("Location")
-    ET.SubElement(root, "Key").text = f"{lat}_{lon}".replace('.', '_')
+    ET.SubElement(root, "Key").text = f"{lat}{lon}".replace('.', '')
     ET.SubElement(root, "LocalizedName").text = "Current Location"
     ET.SubElement(root, "EnglishName").text = "Current Location"
     
@@ -100,7 +77,7 @@ def location_by_geo():
     
     geo = ET.SubElement(root, "GeoPosition")
     ET.SubElement(geo, "Latitude").text = str(lat)
-    ET.SubElement(geo, "Longitude").text = str(lon)
+    ET.SubElement(geo, "Longitude").text = str(lon))
     
     xml_str = ET.tostring(root, encoding='unicode')
     return Response(xml_str, mimetype='application/xml')
@@ -111,7 +88,6 @@ def location_by_geo():
 @app.route('/currentconditions/v1/<location_key>')
 def current_conditions(location_key):
     try:
-        # Extraer coordenadas del location_key
         if '_' in location_key:
             parts = location_key.split('_')
             lat = float(parts[0] + '.' + parts[1])
@@ -130,7 +106,6 @@ def current_conditions(location_key):
         data = resp.json()
         current = data.get('current', {})
         
-        # Crear respuesta XML
         root = ET.Element("CurrentConditions")
         
         ET.SubElement(root, "LocalObservationDateTime").text = datetime.now().isoformat()
@@ -157,7 +132,6 @@ def current_conditions(location_key):
         return Response(xml_str, mimetype='application/xml')
         
     except Exception as e:
-        # Fallback
         root = ET.Element("CurrentConditions")
         ET.SubElement(root, "WeatherText").text = "Sunny"
         ET.SubElement(root, "WeatherIcon").text = "1"
@@ -264,7 +238,7 @@ def index():
     </ul>
     """
 
-if __name__ == '__main__':
+if _name_ == '_main_':
     print("=== TSF Weather Proxy Server ===")
     print("Iniciando servidor en http://0.0.0.0:8080")
     print("Este servidor reemplaza androiddoes.accu-weather.com")
