@@ -10,14 +10,14 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
 # ============================================================
-# ENDPOINT 1: Búsqueda de ciudades (Formato AccuWeather v1)
+# ENDPOINT 1: Búsqueda de ciudades (Formato AccuWeather v1 - 2014)
 # ============================================================
 @app.route('/widget/androiddoes/city-find.asp')
 def city_find_legacy():
     query = request.args.get('location', '')
     
     if not query or len(query) < 2:
-        return Response('<?xml version="1.0"?><Locations></Locations>', 
+        return Response('<?xml version="1.0"?><adc_database></adc_database>', 
                        mimetype='application/xml')
     
     try:
@@ -32,27 +32,29 @@ def city_find_legacy():
         data = resp.json()
         results = data.get('results', [])
         
-        # El root para AccuWeather v1 suele ser <adc_database>
         root = ET.Element("adc_database")
         
         for city in results:
             loc = ET.SubElement(root, "location")
             
-            # Generamos una key numérica simple (lat + lon sin puntos)
             lat = city.get('latitude', 0)
             lon = city.get('longitude', 0)
-            key = f"{str(lat).replace('.', '')}{str(lon).replace('.', '')}"[:8]
+            # Key numérica simple para el widget
+            key_num = f"{str(lat).replace('.', '')}{str(lon).replace('.', '')}"[:8]
+            # Key real para nosotros
+            safe_key = f"{str(lat).replace('.', '_')}_{str(lon).replace('.', '_')}"
             
-            # Etiquetas exactas de la API v1 de AccuWeather
+            # ETIQUETAS CRÍTICAS (2014): cityname, statename, countryname
+            ET.SubElement(loc, "cityname").text = city.get('name', 'Unknown')
+            ET.SubElement(loc, "statename").text = city.get('admin1', city.get('country', ''))
+            ET.SubElement(loc, "countryname").text = city.get('country', 'XX')
+            ET.SubElement(loc, "locationKey").text = key_num
+            ET.SubElement(loc, "key").text = safe_key
+            
+            # Por si acaso el widget es una versión híbrida
             ET.SubElement(loc, "city").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "state").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "country").text = city.get('country', 'XX')
-            ET.SubElement(loc, "locationKey").text = key
-            
-            # Guardamos lat/lon en la key para recuperarlas luego
-            # Formato: LAT_LON (usando guion bajo para evitar problemas)
-            safe_key = f"{str(lat).replace('.', '_')}_{str(lon).replace('.', '_')}"
-            ET.SubElement(loc, "key").text = safe_key
             
         xml_str = ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
@@ -62,7 +64,7 @@ def city_find_legacy():
                        mimetype='application/xml')
 
 # ============================================================
-# ENDPOINT 2: Datos del clima (Formato AccuWeather v1)
+# ENDPOINT 2: Datos del clima (Formato AccuWeather v1 - 2014)
 # ============================================================
 @app.route('/widget/androiddoes/weather-data.asp')
 def weather_data_legacy():
@@ -71,14 +73,13 @@ def weather_data_legacy():
     location_key = request.args.get('location')
     
     try:
-        # Si viene de una búsqueda, la key contiene lat_lon
         if location_key and '_' in location_key:
             parts = location_key.split('_')
             lat = float(parts[0].replace('_', '.'))
             lon = float(parts[1].replace('_', '.'))
         
         if not lat or not lon:
-            lat, lon = 40.4168, -3.7038 # Madrid default
+            lat, lon = 40.4168, -3.7038
         
         params = {
             "latitude": lat,
