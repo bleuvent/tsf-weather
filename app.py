@@ -10,11 +10,11 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
 # ============================================================
-# ENDPOINT 1: Búsqueda de ciudades por nombre (AUTOCOMPLETAR)
+# ENDPOINT 1: Búsqueda de ciudades (Ruta original de TSF Shell)
 # ============================================================
-@app.route('/locations/v1/cities/search')
-def search_cities():
-    query = request.args.get('q', '')
+@app.route('/widget/androiddoes/city-find.asp')
+def city_find_legacy():
+    query = request.args.get('location', '')
     
     if not query or len(query) < 2:
         return Response('<?xml version="1.0"?><Locations></Locations>', 
@@ -36,7 +36,12 @@ def search_cities():
         
         for city in results:
             loc = ET.SubElement(root, "Location")
-            ET.SubElement(loc, "Key").text = f"{city.get('latitude')}{city.get('longitude')}".replace('.', '')
+            # Generamos una key compatible: lat_lon
+            lat = city.get('latitude', 0)
+            lon = city.get('longitude', 0)
+            key = f"{str(lat).replace('.', '_')}_{str(lon).replace('.', '_')}"
+            
+            ET.SubElement(loc, "Key").text = key
             ET.SubElement(loc, "LocalizedName").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "EnglishName").text = city.get('name', 'Unknown')
             
@@ -45,8 +50,8 @@ def search_cities():
             ET.SubElement(country, "ID").text = city.get('country_code', 'XX')
             
             geo = ET.SubElement(loc, "GeoPosition")
-            ET.SubElement(geo, "Latitude").text = str(city.get('latitude', 0))
-            ET.SubElement(geo, "Longitude").text = str(city.get('longitude', 0))
+            ET.SubElement(geo, "Latitude").text = str(lat)
+            ET.SubElement(geo, "Longitude").text = str(lon)
         
         xml_str = ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
@@ -56,110 +61,28 @@ def search_cities():
                        mimetype='application/xml')
 
 # ============================================================
-# ENDPOINT 2: Geoposición por coordenadas
+# ENDPOINT 2: Datos del clima (Ruta original de TSF Shell)
 # ============================================================
-@app.route('/locations/v1/cities/geoposition/search')
-def location_by_geo():
-    lat = request.args.get('q', '').split(',')[0] if ',' in request.args.get('q', '') else request.args.get('lat')
-    lon = request.args.get('q', '').split(',')[1] if ',' in request.args.get('q', '') else request.args.get('lon')
+@app.route('/widget/androiddoes/weather-data.asp')
+def weather_data_legacy():
+    lat = request.args.get('slat')
+    lon = request.args.get('slon')
+    location_key = request.args.get('location') # A veces usa location key
     
-    if not lat or not lon:
-        return Response('<?xml version="1.0"?><Location></Location>', 
-                       mimetype='application/xml')
-    
-    root = ET.Element("Location")
-    ET.SubElement(root, "Key").text = f"{lat}{lon}".replace('.', '')
-    ET.SubElement(root, "LocalizedName").text = "Current Location"
-    ET.SubElement(root, "EnglishName").text = "Current Location"
-    
-    country = ET.SubElement(root, "Country")
-    ET.SubElement(country, "LocalizedName").text = "Unknown"
-    ET.SubElement(country, "ID").text = "XX"
-    
-    geo = ET.SubElement(root, "GeoPosition")
-    ET.SubElement(geo, "Latitude").text = str(lat)
-    ET.SubElement(geo, "Longitude").text = str(lon)
-    
-    xml_str = ET.tostring(root, encoding='unicode')
-    return Response(xml_str, mimetype='application/xml')
-
-# ============================================================
-# ENDPOINT 3: Condiciones actuales del clima
-# ============================================================
-@app.route('/currentconditions/v1/<location_key>')
-def current_conditions(location_key):
     try:
-        if '_' in location_key:
-            parts = location_key.split('_')
-            lat = float(parts[0] + '.' + parts[1])
-            lon = float(parts[2] + '.' + parts[3]) if len(parts) > 3 else 0.0
-        else:
-            lat, lon = 40.4168, -3.7038
+        if not lat or not lon:
+            if location_key and '_' in location_key:
+                parts = location_key.split('_')
+                lat = float(parts[0] + '.' + parts[1])
+                lon = float(parts[2] + '.' + parts[3])
+            else:
+                # Default a Madrid si no hay datos
+                lat, lon = 40.4168, -3.7038
         
         params = {
             "latitude": lat,
             "longitude": lon,
             "current": ["temperature_2m", "relative_humidity_2m", "weather_code", "wind_speed_10m"],
-            "timezone": "auto"
-        }
-        
-        resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
-        data = resp.json()
-        current = data.get('current', {})
-        
-        root = ET.Element("CurrentConditions")
-        
-        ET.SubElement(root, "LocalObservationDateTime").text = datetime.now().isoformat()
-        ET.SubElement(root, "EpochTime").text = str(int(datetime.now().timestamp()))
-        ET.SubElement(root, "WeatherText").text = get_weather_text(current.get('weather_code', 0))
-        ET.SubElement(root, "WeatherIcon").text = str(get_accu_icon(current.get('weather_code', 0)))
-        ET.SubElement(root, "HasPrecipitation").text = "false"
-        ET.SubElement(root, "IsDayTime").text = "true"
-        
-        temp = ET.SubElement(root, "Temperature")
-        metric = ET.SubElement(temp, "Metric")
-        ET.SubElement(metric, "Value").text = str(current.get('temperature_2m', 20))
-        ET.SubElement(metric, "Unit").text = "C"
-        ET.SubElement(metric, "UnitType").text = "17"
-        
-        imperial = ET.SubElement(temp, "Imperial")
-        ET.SubElement(imperial, "Value").text = str(current.get('temperature_2m', 20) * 9/5 + 32)
-        ET.SubElement(imperial, "Unit").text = "F"
-        ET.SubElement(imperial, "UnitType").text = "18"
-        
-        ET.SubElement(root, "RelativeHumidity").text = str(current.get('relative_humidity_2m', 50))
-        
-        xml_str = ET.tostring(root, encoding='unicode')
-        return Response(xml_str, mimetype='application/xml')
-        
-    except Exception as e:
-        root = ET.Element("CurrentConditions")
-        ET.SubElement(root, "WeatherText").text = "Sunny"
-        ET.SubElement(root, "WeatherIcon").text = "1"
-        temp = ET.SubElement(root, "Temperature")
-        metric = ET.SubElement(temp, "Metric")
-        ET.SubElement(metric, "Value").text = "22"
-        ET.SubElement(metric, "Unit").text = "C"
-        
-        xml_str = ET.tostring(root, encoding='unicode')
-        return Response(xml_str, mimetype='application/xml')
-
-# ============================================================
-# ENDPOINT 4: Pronóstico de 5 días
-# ============================================================
-@app.route('/forecasts/v1/daily/5day/<location_key>')
-def forecast_5day(location_key):
-    try:
-        if '_' in location_key:
-            parts = location_key.split('_')
-            lat = float(parts[0] + '.' + parts[1])
-            lon = float(parts[2] + '.' + parts[3]) if len(parts) > 3 else 0.0
-        else:
-            lat, lon = 40.4168, -3.7038
-        
-        params = {
-            "latitude": lat,
-            "longitude": lon,
             "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min"],
             "timezone": "auto",
             "forecast_days": 5
@@ -167,44 +90,47 @@ def forecast_5day(location_key):
         
         resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
         data = resp.json()
+        current = data.get('current', {})
         daily = data.get('daily', {})
         
-        root = ET.Element("DailyForecasts")
+        # Construir XML compatible con AccuWeather v1
+        root = ET.Element("Weather")
         
-        for i in range(5):
-            try:
-                day = ET.SubElement(root, "DailyForecast")
-                
-                date_str = daily.get('time', [])[i] if i < len(daily.get('time', [])) else ""
-                ET.SubElement(day, "Date").text = date_str
-                
-                temp = ET.SubElement(day, "Temperature")
-                min_temp = daily.get('temperature_2m_min', [])[i] if i < len(daily.get('temperature_2m_min', [])) else 15
-                max_temp = daily.get('temperature_2m_max', [])[i] if i < len(daily.get('temperature_2m_max', [])) else 25
-                
-                min_elem = ET.SubElement(temp, "Minimum")
-                ET.SubElement(min_elem, "Value").text = str(min_temp)
-                ET.SubElement(min_elem, "Unit").text = "C"
-                
-                max_elem = ET.SubElement(temp, "Maximum")
-                ET.SubElement(max_elem, "Value").text = str(max_temp)
-                ET.SubElement(max_elem, "Unit").text = "C"
-                
-                day_elem = ET.SubElement(day, "Day")
-                code = daily.get('weather_code', [])[i] if i < len(daily.get('weather_code', [])) else 0
-                ET.SubElement(day_elem, "Icon").text = str(get_accu_icon(code))
-                ET.SubElement(day_elem, "IconPhrase").text = get_weather_text(code)
-                
-            except:
-                continue
+        # Condiciones actuales
+        curr_node = ET.SubElement(root, "CurrentConditions")
+        ET.SubElement(curr_node, "WeatherText").text = get_weather_text(current.get('weather_code', 0))
+        ET.SubElement(curr_node, "WeatherIcon").text = str(get_accu_icon(current.get('weather_code', 0)))
+        ET.SubElement(curr_node, "Temperature").text = str(int(current.get('temperature_2m', 20)))
+        ET.SubElement(curr_node, "Humidity").text = str(current.get('relative_humidity_2m', 50))
+        
+        # Pronóstico
+        forecast_node = ET.SubElement(root, "Forecast")
+        for i in range(min(5, len(daily.get('time', [])))):
+            day_node = ET.SubElement(forecast_node, "Day")
+            ET.SubElement(day_node, "Date").text = daily.get('time', [])[i]
+            ET.SubElement(day_node, "HighTemperature").text = str(int(daily.get('temperature_2m_max', [])[i]))
+            ET.SubElement(day_node, "LowTemperature").text = str(int(daily.get('temperature_2m_min', [])[i]))
+            ET.SubElement(day_node, "WeatherIcon").text = str(get_accu_icon(daily.get('weather_code', [])[i]))
+            ET.SubElement(day_node, "WeatherText").text = get_weather_text(daily.get('weather_code', [])[i])
         
         xml_str = ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
         
     except Exception as e:
-        root = ET.Element("DailyForecasts")
-        xml_str = ET.tostring(root, encoding='unicode')
-        return Response(xml_str, mimetype='application/xml')
+        return Response('<?xml version="1.0"?><Weather><Error>Data unavailable</Error></Weather>', 
+                       mimetype='application/xml')
+
+# ============================================================
+# ENDPOINTS ADICIONALES (Para compatibilidad futura)
+# ============================================================
+@app.route('/locations/v1/cities/search')
+def search_cities():
+    return city_find_legacy()
+
+@app.route('/currentconditions/v1/<location_key>')
+def current_conditions(location_key):
+    # Reutilizamos la lógica de weather_data_legacy
+    return weather_data_legacy()
 
 def get_weather_text(code):
     texts = {
@@ -227,17 +153,7 @@ def get_accu_icon(code):
 
 @app.route('/')
 def index():
-    return """
-    <h1>TSF Weather Server</h1>
-    <p>Servidor funcionando correctamente</p>
-    <p>Endpoints disponibles:</p>
-    <ul>
-        <li>/locations/v1/cities/search?q=CIUDAD - Buscar ciudad</li>
-        <li>/locations/v1/cities/geoposition/search - Por coordenadas</li>
-        <li>/currentconditions/v1/KEY - Clima actual</li>
-        <li>/forecasts/v1/daily/5day/KEY - Pronóstico 5 días</li>
-    </ul>
-    """
+    return "<h1>TSF Weather Server (Proyecto Fénix)</h1><p>Servidor activo y escuchando...</p>"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
