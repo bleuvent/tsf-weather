@@ -36,18 +36,21 @@ def city_find_legacy():
         
         for city in results:
             loc = ET.SubElement(root, "Location")
+            
             # Generamos una key compatible: lat_lon
             lat = city.get('latitude', 0)
             lon = city.get('longitude', 0)
             key = f"{str(lat).replace('.', '_')}_{str(lon).replace('.', '_')}"
             
+            # TSF Shell espera etiquetas específicas para mostrar el nombre
             ET.SubElement(loc, "Key").text = key
+            ET.SubElement(loc, "City").text = city.get('name', 'Unknown')
+            ET.SubElement(loc, "State").text = city.get('admin1', city.get('country', ''))
+            ET.SubElement(loc, "Country").text = city.get('country', 'XX')
+            
+            # Mantenemos estas por si acaso
             ET.SubElement(loc, "LocalizedName").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "EnglishName").text = city.get('name', 'Unknown')
-            
-            country = ET.SubElement(loc, "Country")
-            ET.SubElement(country, "LocalizedName").text = city.get('country', 'Unknown')
-            ET.SubElement(country, "ID").text = city.get('country_code', 'XX')
             
             geo = ET.SubElement(loc, "GeoPosition")
             ET.SubElement(geo, "Latitude").text = str(lat)
@@ -67,16 +70,15 @@ def city_find_legacy():
 def weather_data_legacy():
     lat = request.args.get('slat')
     lon = request.args.get('slon')
-    location_key = request.args.get('location') # A veces usa location key
+    location_key = request.args.get('location')
     
     try:
         if not lat or not lon:
             if location_key and '_' in location_key:
                 parts = location_key.split('_')
-                lat = float(parts[0] + '.' + parts[1])
-                lon = float(parts[2] + '.' + parts[3])
+                lat = float(parts[0].replace('_', '.'))
+                lon = float(parts[1].replace('_', '.'))
             else:
-                # Default a Madrid si no hay datos
                 lat, lon = 40.4168, -3.7038
         
         params = {
@@ -93,7 +95,6 @@ def weather_data_legacy():
         current = data.get('current', {})
         daily = data.get('daily', {})
         
-        # Construir XML compatible con AccuWeather v1
         root = ET.Element("Weather")
         
         # Condiciones actuales
@@ -103,13 +104,21 @@ def weather_data_legacy():
         ET.SubElement(curr_node, "Temperature").text = str(int(current.get('temperature_2m', 20)))
         ET.SubElement(curr_node, "Humidity").text = str(current.get('relative_humidity_2m', 50))
         
-        # Pronóstico
+        # Pronóstico (Ajustado para TSF Shell)
         forecast_node = ET.SubElement(root, "Forecast")
         for i in range(min(5, len(daily.get('time', [])))):
             day_node = ET.SubElement(forecast_node, "Day")
             ET.SubElement(day_node, "Date").text = daily.get('time', [])[i]
+            
+            # TSF Shell a veces espera High y Low dentro de Temperature o directamente
             ET.SubElement(day_node, "HighTemperature").text = str(int(daily.get('temperature_2m_max', [])[i]))
             ET.SubElement(day_node, "LowTemperature").text = str(int(daily.get('temperature_2m_min', [])[i]))
+            
+            # Añadimos una estructura alternativa por si acaso
+            temp_node = ET.SubElement(day_node, "Temperature")
+            ET.SubElement(temp_node, "High").text = str(int(daily.get('temperature_2m_max', [])[i]))
+            ET.SubElement(temp_node, "Low").text = str(int(daily.get('temperature_2m_min', [])[i]))
+            
             ET.SubElement(day_node, "WeatherIcon").text = str(get_accu_icon(daily.get('weather_code', [])[i]))
             ET.SubElement(day_node, "WeatherText").text = get_weather_text(daily.get('weather_code', [])[i])
         
@@ -119,18 +128,6 @@ def weather_data_legacy():
     except Exception as e:
         return Response('<?xml version="1.0"?><Weather><Error>Data unavailable</Error></Weather>', 
                        mimetype='application/xml')
-
-# ============================================================
-# ENDPOINTS ADICIONALES (Para compatibilidad futura)
-# ============================================================
-@app.route('/locations/v1/cities/search')
-def search_cities():
-    return city_find_legacy()
-
-@app.route('/currentconditions/v1/<location_key>')
-def current_conditions(location_key):
-    # Reutilizamos la lógica de weather_data_legacy
-    return weather_data_legacy()
 
 def get_weather_text(code):
     texts = {
