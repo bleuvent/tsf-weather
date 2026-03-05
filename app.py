@@ -2,8 +2,9 @@ from flask import Flask, request, Response
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
+import os
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
@@ -77,7 +78,7 @@ def location_by_geo():
     
     geo = ET.SubElement(root, "GeoPosition")
     ET.SubElement(geo, "Latitude").text = str(lat)
-    ET.SubElement(geo, "Longitude").text = str(lon))
+    ET.SubElement(geo, "Longitude").text = str(lon)
     
     xml_str = ET.tostring(root, encoding='unicode')
     return Response(xml_str, mimetype='application/xml')
@@ -238,10 +239,6 @@ def index():
     </ul>
     """
 
-if _name_ == '_main_':
-    print("=== TSF Weather Proxy Server ===")
-    print("Iniciando servidor en http://0.0.0.0:8080")
-    print("Este servidor reemplaza androiddoes.accu-weather.com")
-    print("Presiona Ctrl+C para detener")
-    print("================================")
-    app.run(host='0.0.0.0', port=8080, debug=False)
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
