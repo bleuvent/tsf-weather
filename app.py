@@ -15,6 +15,8 @@ GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 @app.route('/widget/androiddoes/city-find.asp')
 def city_find_legacy():
     query = request.args.get('location', '')
+    # Limpiar la búsqueda de símbolos como + o %2C (coma)
+    query = query.replace('+', ' ').replace(',', ' ').strip()
     
     if not query or len(query) < 2:
         return Response('<?xml version="1.0"?><adc_database></adc_database>', 
@@ -39,22 +41,15 @@ def city_find_legacy():
             
             lat = city.get('latitude', 0)
             lon = city.get('longitude', 0)
-            # Key numérica simple para el widget
-            key_num = f"{str(lat).replace('.', '')}{str(lon).replace('.', '')}"[:8]
-            # Key real para nosotros
+            # Key real para nosotros (usamos guion bajo para evitar problemas)
             safe_key = f"{str(lat).replace('.', '_')}_{str(lon).replace('.', '_')}"
             
             # ETIQUETAS CRÍTICAS (2014): cityname, statename, countryname
             ET.SubElement(loc, "cityname").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "statename").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "countryname").text = city.get('country', 'XX')
-            ET.SubElement(loc, "locationKey").text = key_num
+            ET.SubElement(loc, "locationKey").text = safe_key[:8] # Key corta para el widget
             ET.SubElement(loc, "key").text = safe_key
-            
-            # Por si acaso el widget es una versión híbrida
-            ET.SubElement(loc, "city").text = city.get('name', 'Unknown')
-            ET.SubElement(loc, "state").text = city.get('admin1', city.get('country', ''))
-            ET.SubElement(loc, "country").text = city.get('country', 'XX')
             
         xml_str = ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
@@ -68,23 +63,31 @@ def city_find_legacy():
 # ============================================================
 @app.route('/widget/androiddoes/weather-data.asp')
 def weather_data_legacy():
-    lat = request.args.get('slat')
-    lon = request.args.get('slon')
+    lat_raw = request.args.get('slat')
+    lon_raw = request.args.get('slon')
     location_key = request.args.get('location')
     
     try:
-        if location_key and '_' in location_key:
+        lat, lon = None, None
+        
+        # Intentar obtener lat/lon de los parámetros directos
+        if lat_raw and lon_raw:
+            lat = float(lat_raw)
+            lon = float(lon_raw)
+        # Si no, intentar desde la location_key
+        elif location_key and '_' in location_key:
             parts = location_key.split('_')
             lat = float(parts[0].replace('_', '.'))
             lon = float(parts[1].replace('_', '.'))
         
-        if not lat or not lon:
-            lat, lon = 40.4168, -3.7038
+        # Si todo falla, usar Santiago como default (ya que Bleu está allí)
+        if lat is None or lon is None:
+            lat, lon = -33.4489, -70.6693
         
         params = {
             "latitude": lat,
             "longitude": lon,
-            "current": ["temperature_2m", "relative_humidity_2m", "weather_code", "wind_speed_10m"],
+            "current": ["temperature_2m", "relative_humidity_2m", "weather_code", "is_day"],
             "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min"],
             "timezone": "auto",
             "forecast_days": 5
@@ -95,14 +98,19 @@ def weather_data_legacy():
         current = data.get('current', {})
         daily = data.get('daily', {})
         
+        is_day = current.get('is_day', 1) == 1
+        
         root = ET.Element("adc_database")
         
         # Condiciones actuales
         curr_node = ET.SubElement(root, "currentconditions")
         ET.SubElement(curr_node, "weathertext").text = get_weather_text(current.get('weather_code', 0))
-        ET.SubElement(curr_node, "weathericon").text = str(get_accu_icon(current.get('weather_code', 0)))
-        ET.SubElement(curr_node, "temperature").text = str(int(current.get('temperature_2m', 20)))
+        # Icono dinámico día/noche
+        icon_code = get_accu_icon(current.get('weather_code', 0), is_day)
+        ET.SubElement(curr_node, "weathericon").text = str(icon_code)
+        ET.SubElement(curr_node, "temperature").text = str(int(current.get('temperature_2m', 15)))
         ET.SubElement(curr_node, "humidity").text = str(current.get('relative_humidity_2m', 50))
+        ET.SubElement(curr_node, "isdaytime").text = "true" if is_day else "false"
         
         # Pronóstico
         forecast_node = ET.SubElement(root, "forecast")
@@ -111,34 +119,46 @@ def weather_data_legacy():
             ET.SubElement(day_node, "obsdate").text = daily.get('time', [])[i]
             ET.SubElement(day_node, "hightemperature").text = str(int(daily.get('temperature_2m_max', [])[i]))
             ET.SubElement(day_node, "lowtemperature").text = str(int(daily.get('temperature_2m_min', [])[i]))
-            ET.SubElement(day_node, "weathericon").text = str(get_accu_icon(daily.get('weather_code', [])[i]))
+            ET.SubElement(day_node, "weathericon").text = str(get_accu_icon(daily.get('weather_code', [])[i], True))
             ET.SubElement(day_node, "weathertext").text = get_weather_text(daily.get('weather_code', [])[i])
         
         xml_str = ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
         
     except Exception as e:
-        return Response('<?xml version="1.0"?><adc_database><error>Data unavailable</error></adc_database>', 
+        # En caso de error catastrófico, devolver algo coherente para Santiago
+        return Response('<?xml version="1.0"?><adc_database><currentconditions><temperature>15</temperature><weathericon>1</weathericon></currentconditions></adc_database>', 
                        mimetype='application/xml')
 
 def get_weather_text(code):
     texts = {
-        0: "Sunny", 1: "Mostly Sunny", 2: "Partly Cloudy", 3: "Cloudy",
-        45: "Foggy", 48: "Foggy", 51: "Light Drizzle", 53: "Drizzle",
-        55: "Heavy Drizzle", 61: "Light Rain", 63: "Rain", 65: "Heavy Rain",
-        71: "Light Snow", 73: "Snow", 75: "Heavy Snow", 77: "Snow Grains",
-        80: "Light Showers", 81: "Showers", 82: "Heavy Showers",
-        95: "Thunderstorm", 96: "Thunderstorm w/ Hail", 99: "Heavy Thunderstorm"
+        0: "Despejado", 1: "Mayormente Despejado", 2: "Parcialmente Nublado", 3: "Nublado",
+        45: "Niebla", 48: "Niebla con Escarcha", 51: "Llovizna Ligera", 53: "Llovizna",
+        55: "Llovizna Intensa", 61: "Lluvia Ligera", 63: "Lluvia", 65: "Lluvia Fuerte",
+        71: "Nieve Ligera", 73: "Nieve", 75: "Nieve Fuerte", 77: "Granizo",
+        80: "Chubascos Ligeros", 81: "Chubascos", 82: "Chubascos Fuertes",
+        95: "Tormenta", 96: "Tormenta con Granizo", 99: "Tormenta Fuerte"
     }
-    return texts.get(code, "Unknown")
+    return texts.get(code, "Despejado")
 
-def get_accu_icon(code):
-    icons = {
+def get_accu_icon(code, is_day=True):
+    # Mapeo de códigos Open-Meteo a iconos de AccuWeather (Día/Noche)
+    # Iconos Noche: 33 (Despejado), 34 (Mayormente Despejado), 35 (Parcialmente Nublado), etc.
+    icons_day = {
         0: 1, 1: 2, 2: 3, 3: 4, 45: 11, 48: 11, 51: 12, 53: 12, 55: 12,
         61: 13, 63: 14, 65: 15, 71: 19, 73: 20, 75: 21, 77: 19,
         80: 12, 81: 13, 82: 14, 85: 19, 86: 20, 95: 15, 96: 16, 99: 17
     }
-    return icons.get(code, 1)
+    icons_night = {
+        0: 33, 1: 34, 2: 35, 3: 36, 45: 37, 48: 37, 51: 39, 53: 39, 55: 39,
+        61: 40, 63: 41, 65: 42, 71: 44, 73: 44, 75: 44, 77: 44,
+        80: 39, 81: 40, 82: 41, 85: 44, 86: 44, 95: 42, 96: 42, 99: 42
+    }
+    
+    if is_day:
+        return icons_day.get(code, 1)
+    else:
+        return icons_night.get(code, 33)
 
 @app.route('/')
 def index():
