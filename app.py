@@ -44,12 +44,17 @@ def city_find_legacy():
             # Key real para nosotros (usamos guion bajo para evitar problemas)
             safe_key = f"{str(lat).replace('.', '_')}_{str(lon).replace('.', '_')}"
             
-            # ETIQUETAS CRÍTICAS (2014): cityname, statename, countryname
+            # ETIQUETAS EXACTAS (2014): City, State, Country (con mayúscula inicial)
+            ET.SubElement(loc, "City").text = city.get('name', 'Unknown')
+            ET.SubElement(loc, "State").text = city.get('admin1', city.get('country', ''))
+            ET.SubElement(loc, "Country").text = city.get('country', 'XX')
+            ET.SubElement(loc, "locationKey").text = safe_key[:8]
+            ET.SubElement(loc, "key").text = safe_key
+            
+            # También incluimos las versiones en minúsculas por si acaso
             ET.SubElement(loc, "cityname").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "statename").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "countryname").text = city.get('country', 'XX')
-            ET.SubElement(loc, "locationKey").text = safe_key[:8] # Key corta para el widget
-            ET.SubElement(loc, "key").text = safe_key
             
         xml_str = ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
@@ -70,19 +75,16 @@ def weather_data_legacy():
     try:
         lat, lon = None, None
         
-        # Intentar obtener lat/lon de los parámetros directos
         if lat_raw and lon_raw:
             lat = float(lat_raw)
             lon = float(lon_raw)
-        # Si no, intentar desde la location_key
         elif location_key and '_' in location_key:
             parts = location_key.split('_')
             lat = float(parts[0].replace('_', '.'))
             lon = float(parts[1].replace('_', '.'))
         
-        # Si todo falla, usar Santiago como default (ya que Bleu está allí)
         if lat is None or lon is None:
-            lat, lon = -33.4489, -70.6693
+            lat, lon = -33.4489, -70.6693 # Santiago default
         
         params = {
             "latitude": lat,
@@ -105,7 +107,6 @@ def weather_data_legacy():
         # Condiciones actuales
         curr_node = ET.SubElement(root, "currentconditions")
         ET.SubElement(curr_node, "weathertext").text = get_weather_text(current.get('weather_code', 0))
-        # Icono dinámico día/noche
         icon_code = get_accu_icon(current.get('weather_code', 0), is_day)
         ET.SubElement(curr_node, "weathericon").text = str(icon_code)
         ET.SubElement(curr_node, "temperature").text = str(int(current.get('temperature_2m', 15)))
@@ -126,7 +127,6 @@ def weather_data_legacy():
         return Response(xml_str, mimetype='application/xml')
         
     except Exception as e:
-        # En caso de error catastrófico, devolver algo coherente para Santiago
         return Response('<?xml version="1.0"?><adc_database><currentconditions><temperature>15</temperature><weathericon>1</weathericon></currentconditions></adc_database>', 
                        mimetype='application/xml')
 
@@ -142,8 +142,6 @@ def get_weather_text(code):
     return texts.get(code, "Despejado")
 
 def get_accu_icon(code, is_day=True):
-    # Mapeo de códigos Open-Meteo a iconos de AccuWeather (Día/Noche)
-    # Iconos Noche: 33 (Despejado), 34 (Mayormente Despejado), 35 (Parcialmente Nublado), etc.
     icons_day = {
         0: 1, 1: 2, 2: 3, 3: 4, 45: 11, 48: 11, 51: 12, 53: 12, 55: 12,
         61: 13, 63: 14, 65: 15, 71: 19, 73: 20, 75: 21, 77: 19,
@@ -154,11 +152,7 @@ def get_accu_icon(code, is_day=True):
         61: 40, 63: 41, 65: 42, 71: 44, 73: 44, 75: 44, 77: 44,
         80: 39, 81: 40, 82: 41, 85: 44, 86: 44, 95: 42, 96: 42, 99: 42
     }
-    
-    if is_day:
-        return icons_day.get(code, 1)
-    else:
-        return icons_night.get(code, 33)
+    return icons_day.get(code, 1) if is_day else icons_night.get(code, 33)
 
 @app.route('/')
 def index():
