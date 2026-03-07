@@ -38,9 +38,11 @@ def city_find_legacy():
         data = resp.json()
         results = data.get('results', [])
         
+        # El contenedor raíz para la búsqueda en 2014 solía ser <adc_database>
         root = ET.Element("adc_database")
         
         for city in results:
+            # En 2014, cada resultado solía estar en una etiqueta <location>
             loc = ET.SubElement(root, "location")
             
             lat = city.get('latitude', 0)
@@ -48,17 +50,19 @@ def city_find_legacy():
             # Key real para nosotros (usamos guion bajo para evitar problemas)
             safe_key = f"{str(lat).replace('.', '_')}_{str(lon).replace('.', '_')}"
             
-            # ETIQUETAS EXACTAS (2014): City, State, Country (con mayúscula inicial)
-            ET.SubElement(loc, "City").text = city.get('name', 'Unknown')
-            ET.SubElement(loc, "State").text = city.get('admin1', city.get('country', ''))
-            ET.SubElement(loc, "Country").text = city.get('country', 'XX')
-            ET.SubElement(loc, "locationKey").text = safe_key
-            ET.SubElement(loc, "key").text = safe_key
+            # ETIQUETAS "VINTAGE" (2014): TSF Shell busca estas específicamente
+            # Probamos con todas las variantes conocidas para asegurar compatibilidad
+            ET.SubElement(loc, "city").text = city.get('name', 'Unknown')
+            ET.SubElement(loc, "state").text = city.get('admin1', city.get('country', ''))
+            ET.SubElement(loc, "country").text = city.get('country', 'XX')
             
-            # También incluimos las versiones en minúsculas por si acaso
             ET.SubElement(loc, "cityname").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "statename").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "countryname").text = city.get('country', 'XX')
+            
+            # La key es vital para la selección
+            ET.SubElement(loc, "locationKey").text = safe_key
+            ET.SubElement(loc, "key").text = safe_key
             
         xml_str = ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
@@ -79,16 +83,19 @@ def weather_data_legacy():
     try:
         lat, lon = None, None
         
-        if lat_raw and lon_raw:
-            lat = float(lat_raw)
-            lon = float(lon_raw)
-        elif location_key and '_' in location_key:
+        # Si viene de una selección manual, la key contiene lat_lon
+        if location_key and '_' in location_key:
             parts = location_key.split('_')
             lat = float(parts[0].replace('_', '.'))
             lon = float(parts[1].replace('_', '.'))
+        # Si no, intentar obtener lat/lon de los parámetros directos (Auto Localizar)
+        elif lat_raw and lon_raw:
+            lat = float(lat_raw)
+            lon = float(lon_raw)
         
+        # Si todo falla, usar Santiago como default
         if lat is None or lon is None:
-            lat, lon = -33.4489, -70.6693 # Santiago default
+            lat, lon = -33.4489, -70.6693
         
         params = {
             "latitude": lat,
