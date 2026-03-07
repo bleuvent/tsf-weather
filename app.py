@@ -9,6 +9,10 @@ app = Flask(__name__)
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
+def c_to_f(c):
+    """Convierte Celsius a Fahrenheit para que TSF Shell lo procese bien."""
+    return (c * 9/5) + 32
+
 # ============================================================
 # ENDPOINT 1: Búsqueda de ciudades (Formato AccuWeather v1 - 2014)
 # ============================================================
@@ -48,7 +52,7 @@ def city_find_legacy():
             ET.SubElement(loc, "City").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "State").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "Country").text = city.get('country', 'XX')
-            ET.SubElement(loc, "locationKey").text = safe_key[:8]
+            ET.SubElement(loc, "locationKey").text = safe_key
             ET.SubElement(loc, "key").text = safe_key
             
             # También incluimos las versiones en minúsculas por si acaso
@@ -109,7 +113,12 @@ def weather_data_legacy():
         ET.SubElement(curr_node, "weathertext").text = get_weather_text(current.get('weather_code', 0))
         icon_code = get_accu_icon(current.get('weather_code', 0), is_day)
         ET.SubElement(curr_node, "weathericon").text = str(icon_code)
-        ET.SubElement(curr_node, "temperature").text = str(int(current.get('temperature_2m', 15)))
+        
+        # CONVERSIÓN A FAHRENHEIT PARA TSF SHELL
+        temp_c = current.get('temperature_2m', 15)
+        temp_f = int(c_to_f(temp_c))
+        ET.SubElement(curr_node, "temperature").text = str(temp_f)
+        
         ET.SubElement(curr_node, "humidity").text = str(current.get('relative_humidity_2m', 50))
         ET.SubElement(curr_node, "isdaytime").text = "true" if is_day else "false"
         
@@ -118,8 +127,13 @@ def weather_data_legacy():
         for i in range(min(5, len(daily.get('time', [])))):
             day_node = ET.SubElement(forecast_node, "day")
             ET.SubElement(day_node, "obsdate").text = daily.get('time', [])[i]
-            ET.SubElement(day_node, "hightemperature").text = str(int(daily.get('temperature_2m_max', [])[i]))
-            ET.SubElement(day_node, "lowtemperature").text = str(int(daily.get('temperature_2m_min', [])[i]))
+            
+            # CONVERSIÓN A FAHRENHEIT PARA PRONÓSTICO
+            max_f = int(c_to_f(daily.get('temperature_2m_max', [])[i]))
+            min_f = int(c_to_f(daily.get('temperature_2m_min', [])[i]))
+            
+            ET.SubElement(day_node, "hightemperature").text = str(max_f)
+            ET.SubElement(day_node, "lowtemperature").text = str(min_f)
             ET.SubElement(day_node, "weathericon").text = str(get_accu_icon(daily.get('weather_code', [])[i], True))
             ET.SubElement(day_node, "weathertext").text = get_weather_text(daily.get('weather_code', [])[i])
         
@@ -127,7 +141,7 @@ def weather_data_legacy():
         return Response(xml_str, mimetype='application/xml')
         
     except Exception as e:
-        return Response('<?xml version="1.0"?><adc_database><currentconditions><temperature>15</temperature><weathericon>1</weathericon></currentconditions></adc_database>', 
+        return Response('<?xml version="1.0"?><adc_database><currentconditions><temperature>60</temperature><weathericon>1</weathericon></currentconditions></adc_database>', 
                        mimetype='application/xml')
 
 def get_weather_text(code):
