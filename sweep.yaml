@@ -1,0 +1,8 @@
+# sweep.yaml
+branch: 'main'
+language: 'typescript'
+description: 'Este es un proyecto de predicción meteorológica (tsf-weather) usando TypeScript.'
+rules:
+  - "Usa siempre tipos estrictos de TypeScript."
+  - "Prefiere composición sobre herencia."
+  - "Escribe pruebas unitarias con Jest para cada nueva funcionalidad."
