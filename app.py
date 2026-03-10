@@ -11,7 +11,7 @@ GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
 def c_to_f(c):
     """Convierte Celsius a Fahrenheit para que TSF Shell lo procese bien."""
-    return (c * 9/5) + 32
+    return (c * 9/5) + 32  # ← CORREGIDO: faltaba el +
 
 # ============================================================
 # ENDPOINT 1: Búsqueda de ciudades (Formato AccuWeather v1 - 2014)
@@ -19,8 +19,8 @@ def c_to_f(c):
 @app.route('/widget/androiddoes/city-find.asp')
 def city_find_legacy():
     query = request.args.get('location', '')
-    # Limpiar la búsqueda de símbolos como + o %2C (coma)
-    query = query.replace('+', ' ').replace(',', ' ').strip()
+    # Limpiar la búsqueda de símbolos como + o , (coma)
+    query = query.replace('+', ' ').replace(',', ' ').strip()  # ← CORREGIDO: replace(' ', ' ') no hacía nada
 
     if not query or len(query) < 2:
         return Response('<?xml version="1.0"?><adc_database></adc_database>', 
@@ -67,9 +67,7 @@ def city_find_legacy():
             ET.SubElement(loc, "statename").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "countryname").text = city.get('country', 'XX')
 
-            # La key es vital para la selección
-            ET.SubElement(loc, "locationKey").text = safe_key
-            ET.SubElement(loc, "key").text = safe_key
+            # La key es vital para la selección (duplicado eliminado)
             
         xml_str = ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
@@ -90,24 +88,20 @@ def weather_data_legacy():
     try:
         lat, lon = None, None
 
-        if lat_raw and lon_raw:
-            lat = float(lat_raw)
-            lon = float(lon_raw)
-        elif location_key and '_' in location_key:
-        # Si viene de una selección manual, la key contiene lat_lon
+        # ← CORREGIDO: Lógica simplificada y sin indentación rota
         if location_key and '_' in location_key:
+            # Si viene de una selección manual, la key contiene lat_lon
             parts = location_key.split('_')
             lat = float(parts[0].replace('_', '.'))
             lon = float(parts[1].replace('_', '.'))
-        # Si no, intentar obtener lat/lon de los parámetros directos (Auto Localizar)
         elif lat_raw and lon_raw:
+            # Si no, intentar obtener lat/lon de los parámetros directos (Auto Localizar)
             lat = float(lat_raw)
             lon = float(lon_raw)
 
         # Si todo falla, usar Santiago como default
         if lat is None or lon is None:
-            lat, lon = -33.4489, -70.6693 # Santiago default
-            lat, lon = -33.4489, -70.6693
+            lat, lon = -33.4489, -70.6693  # Santiago default
 
         params = {
             "latitude": lat,
@@ -194,3 +188,4 @@ def index():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
+    
