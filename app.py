@@ -8,7 +8,8 @@ app = Flask(__name__)
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
-# Diccionario en memoria para las coordenadas
+# Diccionario para convertir IDs numéricos en coordenadas
+# TSF Shell prefiere IDs que parezcan códigos postales o de AccuWeather
 location_db = {}
 
 def c_to_f(c):
@@ -20,36 +21,35 @@ def city_find_legacy():
     query = query.replace('+', ' ').strip()
     
     try:
-        params = {"name": query, "count": 8, "language": "es", "format": "json"}
+        params = {"name": query, "count": 5, "language": "es", "format": "json"}
         resp = requests.get(GEOCODING_URL, params=params, timeout=10)
         data = resp.json()
         results = data.get('results', [])
         
-        # Estructura ultra-completa basada en el API de AccuWeather 2014
         root = ET.Element("adc_database")
         for city in results:
             loc = ET.SubElement(root, "location")
             
-            # Generamos un ID que parezca real (entero positivo)
-            city_id = str(abs(hash(f"{city.get('latitude')}{city.get('longitude')}")) % 1000000)
-            location_db[city_id] = {"lat": city.get('latitude'), "lon": city.get('longitude')}
+            # Creamos un ID numérico basado en la lat/lon para que sea único
+            city_id = abs(hash(f"{city.get('latitude')}{city.get('longitude')}")) % 1000000
             
-            # TSF Shell busca estas etiquetas en este orden exacto:
-            ET.SubElement(loc, "city").text = city.get('name', 'City')
-            ET.SubElement(loc, "state").text = city.get('admin1', city.get('country', ''))
-            ET.SubElement(loc, "locationKey").text = city_id
+            # Guardamos la relación ID -> Coordenadas en la memoria del servidor
+            location_db[str(city_id)] = {
+                "lat": city.get('latitude'),
+                "lon": city.get('longitude')
+            }
             
-            # ETIQUETAS DE COMPATIBILIDAD (El truco para quitar el "Null")
-            ET.SubElement(loc, "localizedname").text = city.get('name', 'City')
-            ET.SubElement(loc, "englishname").text = city.get('name', 'City')
-            ET.SubElement(loc, "country").text = city.get('country_code', 'XX')
-            ET.SubElement(loc, "key").text = city_id
-            ET.SubElement(loc, "type").text = "City"
+            # TSF espera un entero en locationKey para que sea "seleccionable"
+            ET.SubElement(loc, "city").text = city.get('name', 'City')[:15]
+            ET.SubElement(loc, "state").text = city.get('admin1', 'ST')[:10]
+            ET.SubElement(loc, "locationKey").text = str(city_id)
+            # Algunas versiones de TSF usan 'key' en lugar de 'locationKey'
+            ET.SubElement(loc, "key").text = str(city_id)
 
         xml_str = '<?xml version="1.0" encoding="utf-8" ?>' + ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
-    except Exception as e:
-        return Response(f'<?xml version="1.0"?><adc_database><error>{str(e)}</error></adc_database>', mimetype='application/xml')
+    except:
+        return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='application/xml')
 
 @app.route('/widget/androiddoes/weather-data.asp')
 def weather_data_legacy():
@@ -58,13 +58,17 @@ def weather_data_legacy():
     location_key = request.args.get('location')
     
     lat, lon = None, None
+    
     try:
+        # 1. Si el widget nos envía el ID numérico que creamos
         if location_key and location_key in location_db:
             coords = location_db[location_key]
             lat, lon = coords['lat'], coords['lon']
+        # 2. Si es ubicación automática por GPS
         elif lat_raw and lon_raw:
             lat, lon = float(lat_raw), float(lon_raw)
         
+        # Fallback por si todo falla
         if lat is None: lat, lon = -33.44, -70.66
 
         params = {
@@ -80,23 +84,16 @@ def weather_data_legacy():
         is_day = current.get('is_day') == 1
         
         root = ET.Element("adc_database")
-        
-        # Cabecera de unidades
-        units = ET.SubElement(root, "units")
-        ET.SubElement(units, "temp").text = "f"
-        ET.SubElement(units, "dist").text = "m"
-        
-        # Condiciones actuales
         curr = ET.SubElement(root, "currentconditions")
-        ET.SubElement(curr, "weathertext").text = "Sunny"
+        ET.SubElement(curr, "weathertext").text = "Clear"
+        
+        # Iconos con zfill(2) y lógica de noche que ya sabemos que funciona
         icon_val = get_accu_icon(current.get('weather_code', 0), is_day)
         ET.SubElement(curr, "weathericon").text = str(icon_val).zfill(2)
         ET.SubElement(curr, "temperature").text = str(c_to_f(current.get('temperature_2m', 15)))
         ET.SubElement(curr, "humidity").text = str(int(current.get('relative_humidity_2m', 50)))
         ET.SubElement(curr, "isdaytime").text = "true" if is_day else "false"
-        ET.SubElement(curr, "url").text = "http://www.accuweather.com"
         
-        # Pronóstico
         forecast = ET.SubElement(root, "forecast")
         for i in range(min(5, len(daily.get('time', [])))):
             day = ET.SubElement(forecast, "day")
