@@ -3,6 +3,7 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 import os
+import traceback
 
 app = Flask(__name__)
 
@@ -10,17 +11,13 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
 def c_to_f(c):
-    """Convierte Celsius a Fahrenheit para que TSF Shell lo procese bien."""
-    return (c * 9/5) + 32  # ← CORREGIDO: faltaba el +
+    """Convierte Celsius a Fahrenheit."""
+    return (c * 9/5) + 32
 
-# ============================================================
-# ENDPOINT 1: Búsqueda de ciudades (Formato AccuWeather v1 - 2014)
-# ============================================================
 @app.route('/widget/androiddoes/city-find.asp')
 def city_find_legacy():
     query = request.args.get('location', '')
-    # Limpiar la búsqueda de símbolos como + o , (coma)
-    query = query.replace('+', ' ').replace(',', ' ').strip()  # ← CORREGIDO: replace(' ', ' ') no hacía nada
+    query = query.replace('+', ' ').replace(',', ' ').strip()
 
     if not query or len(query) < 2:
         return Response('<?xml version="1.0"?><adc_database></adc_database>', 
@@ -35,50 +32,40 @@ def city_find_legacy():
         }
 
         resp = requests.get(GEOCODING_URL, params=params, timeout=10)
+        resp.raise_for_status()  # ← IMPORTANTE: Verificar errores HTTP
         data = resp.json()
         results = data.get('results', [])
 
-        # El contenedor raíz para la búsqueda en 2014 solía ser <adc_database>
         root = ET.Element("adc_database")
 
         for city in results:
-            # En 2014, cada resultado solía estar en una etiqueta <location>
             loc = ET.SubElement(root, "location")
 
             lat = city.get('latitude', 0)
             lon = city.get('longitude', 0)
-            # Key real para nosotros (usamos guion bajo para evitar problemas)
             safe_key = f"{str(lat).replace('.', '_')}_{str(lon).replace('.', '_')}"
 
-            # ETIQUETAS EXACTAS (2014): City, State, Country (con mayúscula inicial)
             ET.SubElement(loc, "City").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "State").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "Country").text = city.get('country', 'XX')
             ET.SubElement(loc, "locationKey").text = safe_key
             ET.SubElement(loc, "key").text = safe_key
-            # ETIQUETAS "VINTAGE" (2014): TSF Shell busca estas específicamente
-            # Probamos con todas las variantes conocidas para asegurar compatibilidad
             ET.SubElement(loc, "city").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "state").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "country").text = city.get('country', 'XX')
-
-            # También incluimos las versiones en minúsculas por si acaso
             ET.SubElement(loc, "cityname").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "statename").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "countryname").text = city.get('country', 'XX')
 
-            # La key es vital para la selección (duplicado eliminado)
-            
         xml_str = ET.tostring(root, encoding='unicode')
         return Response(xml_str, mimetype='application/xml')
 
     except Exception as e:
+        print(f"ERROR en city-find: {str(e)}")
+        print(traceback.format_exc())
         return Response('<?xml version="1.0"?><adc_database></adc_database>', 
                        mimetype='application/xml')
 
-# ============================================================
-# ENDPOINT 2: Datos del clima (Formato AccuWeather v1 - 2014)
-# ============================================================
 @app.route('/widget/androiddoes/weather-data.asp')
 def weather_data_legacy():
     lat_raw = request.args.get('slat')
@@ -88,34 +75,41 @@ def weather_data_legacy():
     try:
         lat, lon = None, None
 
-        # ← CORREGIDO: Lógica simplificada y sin indentación rota
         if location_key and '_' in location_key:
-            # Si viene de una selección manual, la key contiene lat_lon
             parts = location_key.split('_')
             lat = float(parts[0].replace('_', '.'))
             lon = float(parts[1].replace('_', '.'))
         elif lat_raw and lon_raw:
-            # Si no, intentar obtener lat/lon de los parámetros directos (Auto Localizar)
             lat = float(lat_raw)
             lon = float(lon_raw)
 
-        # Si todo falla, usar Santiago como default
         if lat is None or lon is None:
-            lat, lon = -33.4489, -70.6693  # Santiago default
+            lat, lon = -33.4489, -70.6693
 
+        print(f"Consultando clima para: lat={lat}, lon={lon}")  # ← DEBUG
+
+        # ← CORREGIDO: Open-Meteo espera parámetros separados por comas, no listas Python
         params = {
             "latitude": lat,
             "longitude": lon,
-            "current": ["temperature_2m", "relative_humidity_2m", "weather_code", "is_day"],
-            "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min"],
+            "current": "temperature_2m,relative_humidity_2m,weather_code,is_day",
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min",
             "timezone": "auto",
             "forecast_days": 5
         }
 
         resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
+        resp.raise_for_status()  # ← Verificar errores HTTP
         data = resp.json()
+        
+        print(f"Respuesta Open-Meteo: {data}")  # ← DEBUG
+
         current = data.get('current', {})
         daily = data.get('daily', {})
+
+        # ← CORREGIDO: Verificar que tenemos datos válidos
+        if not current or not daily:
+            raise ValueError("Datos incompletos de Open-Meteo")
 
         is_day = current.get('is_day', 1) == 1
 
@@ -127,7 +121,6 @@ def weather_data_legacy():
         icon_code = get_accu_icon(current.get('weather_code', 0), is_day)
         ET.SubElement(curr_node, "weathericon").text = str(icon_code)
 
-        # CONVERSIÓN A FAHRENHEIT PARA TSF SHELL
         temp_c = current.get('temperature_2m', 15)
         temp_f = int(c_to_f(temp_c))
         ET.SubElement(curr_node, "temperature").text = str(temp_f)
@@ -137,25 +130,44 @@ def weather_data_legacy():
 
         # Pronóstico
         forecast_node = ET.SubElement(root, "forecast")
-        for i in range(min(5, len(daily.get('time', [])))):
-            day_node = ET.SubElement(forecast_node, "day")
-            ET.SubElement(day_node, "obsdate").text = daily.get('time', [])[i]
+        
+        # ← CORREGIDO: Verificar que daily tiene datos antes de iterar
+        daily_times = daily.get('time', [])
+        daily_codes = daily.get('weather_code', [])
+        daily_max = daily.get('temperature_2m_max', [])
+        daily_min = daily.get('temperature_2m_min', [])
+        
+        if not daily_times:
+            raise ValueError("No hay datos diarios disponibles")
 
-            # CONVERSIÓN A FAHRENHEIT PARA PRONÓSTICO
-            max_f = int(c_to_f(daily.get('temperature_2m_max', [])[i]))
-            min_f = int(c_to_f(daily.get('temperature_2m_min', [])[i]))
+        for i in range(min(5, len(daily_times))):
+            day_node = ET.SubElement(forecast_node, "day")
+            ET.SubElement(day_node, "obsdate").text = daily_times[i]
+
+            # ← CORREGIDO: Verificar índices antes de acceder
+            max_c = daily_max[i] if i < len(daily_max) else 15
+            min_c = daily_min[i] if i < len(daily_min) else 10
+            
+            max_f = int(c_to_f(max_c))
+            min_f = int(c_to_f(min_c))
 
             ET.SubElement(day_node, "hightemperature").text = str(max_f)
             ET.SubElement(day_node, "lowtemperature").text = str(min_f)
-            ET.SubElement(day_node, "weathericon").text = str(get_accu_icon(daily.get('weather_code', [])[i], True))
-            ET.SubElement(day_node, "weathertext").text = get_weather_text(daily.get('weather_code', [])[i])
+            
+            code = daily_codes[i] if i < len(daily_codes) else 0
+            ET.SubElement(day_node, "weathericon").text = str(get_accu_icon(code, True))
+            ET.SubElement(day_node, "weathertext").text = get_weather_text(code)
 
         xml_str = ET.tostring(root, encoding='unicode')
+        print(f"XML generado: {xml_str[:200]}...")  # ← DEBUG
         return Response(xml_str, mimetype='application/xml')
 
     except Exception as e:
-        return Response('<?xml version="1.0"?><adc_database><currentconditions><temperature>60</temperature><weathericon>1</weathericon></currentconditions></adc_database>', 
-                       mimetype='application/xml')
+        print(f"ERROR en weather-data: {str(e)}")
+        print(traceback.format_exc())
+        # XML de fallback para que TSF no se rompa
+        fallback = '''<?xml version="1.0"?><adc_database><currentconditions><temperature>60</temperature><weathericon>1</weathericon><weathertext>Error</weathertext></currentconditions></adc_database>'''
+        return Response(fallback, mimetype='application/xml')
 
 def get_weather_text(code):
     texts = {
@@ -188,4 +200,4 @@ def index():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-    
+        
