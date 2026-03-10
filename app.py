@@ -1,29 +1,28 @@
 from flask import Flask, request, Response
 import requests
-import xml.etree.ElementTree as ET
 import os
 
 app = Flask(__name__)
 
-# Diccionario global para vincular IDs con coordenadas
 location_db = {}
 
 def c_to_f(c):
-    return int((c * 9/5) + 32)
+    try:
+        return int((c * 9/5) + 32)
+    except:
+        return 60
 
 @app.route('/widget/androiddoes/city-find.asp')
 def city_find_legacy():
-    query = request.args.get('location', '')
-    query = query.replace('+', ' ').strip()
-    
+    query = request.args.get('location', '').replace('+', ' ').strip()
     try:
-        # Buscamos en Open-Meteo
         resp = requests.get("https://geocoding-api.open-meteo.com/v1/search", 
                             params={"name": query, "count": 10, "language": "es", "format": "json"}, timeout=10)
         results = resp.json().get('results', [])
         
-        # XML Manual para asegurar el orden exacto de las etiquetas
-        xml = '<?xml version="1.0" encoding="utf-8" ?>\n<adc_database>\n'
+        # El Namespace xmlns:adc es CRITICO para que TSF Shell no muestre Null
+        xml = '<?xml version="1.0" encoding="utf-8" ?>\n'
+        xml += '<adc_database xmlns:adc="http://www.accuweather.com">\n'
         for city in results:
             city_id = str(abs(hash(f"{city.get('latitude')}{city.get('longitude')}")) % 100000)
             location_db[city_id] = {"lat": city.get('latitude'), "lon": city.get('longitude')}
@@ -35,7 +34,6 @@ def city_find_legacy():
             xml += f'    <cityname>{city.get("name")}, {city.get("country_code")}</cityname>\n'
             xml += '  </location>\n'
         xml += '</adc_database>'
-        
         return Response(xml, mimetype='text/xml')
     except:
         return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='text/xml')
@@ -55,25 +53,25 @@ def weather_data_legacy():
         
         if lat is None: lat, lon = -33.44, -70.66
 
-        # Datos de clima
         w_resp = requests.get("https://api.open-meteo.com/v1/forecast", params={
             "latitude": lat, "longitude": lon,
             "current": ["temperature_2m", "relative_humidity_2m", "weather_code", "is_day"],
             "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min"],
             "timezone": "auto", "forecast_days": 5
         }, timeout=10)
+        
         data = w_resp.json()
         curr = data.get('current', {})
         daily = data.get('daily', {})
         is_day = curr.get('is_day', 1) == 1
 
-        # Construcción manual del XML de clima (evita errores de 259 bytes)
-        xml = '<?xml version="1.0" encoding="utf-8" ?>\n<adc_database>\n'
+        # Construcción manual con Namespace
+        xml = '<?xml version="1.0" encoding="utf-8" ?>\n'
+        xml += '<adc_database xmlns:adc="http://www.accuweather.com">\n'
         xml += '  <units><temp>f</temp><dist>m</dist></units>\n'
         xml += '  <currentconditions>\n'
-        xml += f'    <weathertext>Clear</weathertext>\n'
+        xml += '    <weathertext>Clear</weathertext>\n'
         
-        # Lógica de iconos
         icon = {0:1, 1:2, 2:3, 3:6, 45:11, 51:12, 61:13, 80:18, 95:16}.get(curr.get('weather_code', 0), 1)
         if not is_day and icon <= 5: icon += 32
         
@@ -81,6 +79,7 @@ def weather_data_legacy():
         xml += f'    <temperature>{c_to_f(curr.get("temperature_2m", 15))}</temperature>\n'
         xml += f'    <humidity>{int(curr.get("relative_humidity_2m", 50))}</humidity>\n'
         xml += f'    <isdaytime>{"true" if is_day else "false"}</isdaytime>\n'
+        xml += '    <url>http://www.accuweather.com</url>\n'
         xml += '  </currentconditions>\n'
         
         xml += '  <forecast>\n'
@@ -95,8 +94,9 @@ def weather_data_legacy():
         xml += '</adc_database>'
         
         return Response(xml, mimetype='text/xml')
-    except:
-        return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='text/xml')
+    except Exception as e:
+        # Esto evitará los 50 bytes de error, enviando al menos un XML válido
+        return Response(f'<?xml version="1.0"?><adc_database><error>{str(e)}</error></adc_database>', mimetype='text/xml')
 
 @app.route('/')
 def index(): return "TSF Active"
