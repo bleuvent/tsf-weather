@@ -6,22 +6,19 @@ import os
 import traceback
 import time
 import random
+import re
 
 app = Flask(__name__)
 
 # ============================================================
 # CONFIGURACIÓN DE APIs
 # ============================================================
-# Opción A: Open-Meteo (gratis, sin key, pero rate limitado)
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
-# Opción B: WeatherAPI (gratis 1M/mes, requiere key, más estable)
-# Regístrate gratis en https://www.weatherapi.com/ y pon tu key aquí:
-WEATHERAPI_KEY = os.environ.get("WEATHERAPI_KEY", "")  # O ponla directamente: "tu-key-aqui"
+WEATHERAPI_KEY = os.environ.get("WEATHERAPI_KEY", "")
 WEATHERAPI_URL = "http://api.weatherapi.com/v1/forecast.json"
 
-# Forzar uso de WeatherAPI si tenemos key, sino Open-Meteo
 USE_WEATHERAPI = bool(WEATHERAPI_KEY)
 
 # ============================================================
@@ -30,10 +27,9 @@ USE_WEATHERAPI = bool(WEATHERAPI_KEY)
 weather_cache = {}
 CACHE_DURATION = timedelta(minutes=30)
 LAST_REQUEST_TIME = 0
-MIN_REQUEST_INTERVAL = 0.5 if USE_WEATHERAPI else 2.0  # WeatherAPI permite más rápido
+MIN_REQUEST_INTERVAL = 0.5 if USE_WEATHERAPI else 2.0
 
 def get_cache_key(lat, lon):
-    """Redondear coordenadas a 1 decimal"""
     return f"{round(lat, 1)}_{round(lon, 1)}"
 
 def get_cached_weather(lat, lon):
@@ -62,79 +58,23 @@ def rate_limit():
         time.sleep(sleep_time)
     LAST_REQUEST_TIME = time.time()
 
-# ============================================================
-# MAPEO DE CÓDIGOS WeatherAPI -> AccuWeather
-# ============================================================
 def weatherapi_to_accu_icon(code, is_day=1):
-    """
-    Mapea códigos de WeatherAPI a iconos de AccuWeather
-    WeatherAPI codes: https://www.weatherapi.com/docs/weather_conditions.json
-    """
     day_map = {
-        1000: 1,   # Sunny
-        1003: 3,   # Partly cloudy
-        1006: 4,   # Cloudy
-        1009: 4,   # Overcast
-        1030: 11,  # Mist
-        1063: 12,  # Patchy rain possible
-        1066: 19,  # Patchy snow possible
-        1069: 19,  # Patchy sleet possible
-        1072: 12,  # Patchy freezing drizzle possible
-        1087: 15,  # Thundery outbreaks possible
-        1114: 19,  # Blowing snow
-        1117: 21,  # Blizzard
-        1135: 11,  # Fog
-        1147: 11,  # Freezing fog
-        1150: 12,  # Patchy light drizzle
-        1153: 12,  # Light drizzle
-        1168: 12,  # Freezing drizzle
-        1171: 14,  # Heavy freezing drizzle
-        1180: 12,  # Patchy light rain
-        1183: 13,  # Light rain
-        1186: 13,  # Moderate rain at times
-        1189: 14,  # Moderate rain
-        1192: 15,  # Heavy rain at times
-        1195: 15,  # Heavy rain
-        1198: 13,  # Light freezing rain
-        1201: 15,  # Moderate or heavy freezing rain
-        1204: 19,  # Light sleet
-        1207: 20,  # Moderate or heavy sleet
-        1210: 19,  # Patchy light snow
-        1213: 20,  # Light snow
-        1216: 20,  # Patchy moderate snow
-        1219: 21,  # Moderate snow
-        1222: 21,  # Patchy heavy snow
-        1225: 21,  # Heavy snow
-        1237: 21,  # Ice pellets
-        1240: 12,  # Light rain shower
-        1243: 13,  # Moderate or heavy rain shower
-        1246: 15,  # Torrential rain shower
-        1249: 19,  # Light sleet showers
-        1252: 20,  # Moderate or heavy sleet showers
-        1255: 19,  # Light snow showers
-        1258: 20,  # Moderate or heavy snow showers
-        1261: 19,  # Light showers of ice pellets
-        1264: 21,  # Moderate or heavy showers of ice pellets
-        1273: 15,  # Patchy light rain with thunder
-        1276: 16,  # Moderate or heavy rain with thunder
-        1279: 19,  # Patchy light snow with thunder
-        1282: 21,  # Moderate or heavy snow with thunder
+        1000: 1, 1003: 3, 1006: 4, 1009: 4, 1030: 11, 1063: 12, 1066: 19,
+        1069: 19, 1072: 12, 1087: 15, 1114: 19, 1117: 21, 1135: 11, 1147: 11,
+        1150: 12, 1153: 12, 1168: 12, 1171: 14, 1180: 12, 1183: 13, 1186: 13,
+        1189: 14, 1192: 15, 1195: 15, 1198: 13, 1201: 15, 1204: 19, 1207: 20,
+        1210: 19, 1213: 20, 1216: 20, 1219: 21, 1222: 21, 1225: 21, 1237: 21,
+        1240: 12, 1243: 13, 1246: 15, 1249: 19, 1252: 20, 1255: 19, 1258: 20,
+        1261: 19, 1264: 21, 1273: 15, 1276: 16, 1279: 19, 1282: 21,
     }
-    
-    night_map = {
-        1000: 33,  # Clear
-        1003: 35,  # Partly cloudy
-        1006: 36,  # Cloudy
-        1009: 36,  # Overcast
-    }
-    
+    night_map = {1000: 33, 1003: 35, 1006: 36, 1009: 36}
     if is_day:
         return day_map.get(code, 1)
     else:
         return night_map.get(code, day_map.get(code, 33))
 
 def weatherapi_to_text(code):
-    """Textos en español para códigos WeatherAPI"""
     texts = {
         1000: "Despejado", 1003: "Parcialmente Nublado", 1006: "Nublado",
         1009: "Cubierto", 1030: "Neblina", 1063: "Posible Lluvia",
@@ -157,7 +97,6 @@ def city_find_legacy():
                        mimetype='application/xml')
 
     try:
-        # Usar Open-Meteo para geocoding (suele ser más permisivo para esto)
         params = {
             "name": query,
             "count": 10,
@@ -177,8 +116,19 @@ def city_find_legacy():
 
             lat = city.get('latitude', 0)
             lon = city.get('longitude', 0)
-            safe_key = f"{str(lat).replace('.', '_')}_{str(lon).replace('.', '_')}"
+            
+            # ============================================================
+            # FORMATO CORREGIDO: Doble guion bajo para separar lat/lon
+            # ============================================================
+            lat_str = f"{lat:+.6f}"
+            lon_str = f"{lon:+.6f}"
+            
+            # Formato: 19_450830__-70_694720 (doble guion bajo entre lat y lon)
+            safe_key = f"{lat_str.replace('.', '_').replace('+', '')}__{lon_str.replace('.', '_').replace('+', '')}"
 
+            print(f"Generando key: {safe_key} para {city.get('name')}")
+
+            # ETIQUETAS AccuWeather v1 (2014)
             ET.SubElement(loc, "City").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "State").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "Country").text = city.get('country', 'XX')
@@ -190,12 +140,16 @@ def city_find_legacy():
             ET.SubElement(loc, "cityname").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "statename").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "countryname").text = city.get('country', 'XX')
+            ET.SubElement(loc, "latitude").text = str(lat)
+            ET.SubElement(loc, "longitude").text = str(lon)
 
         xml_str = ET.tostring(root, encoding='unicode')
+        print(f"XML generado para '{query}': {len(xml_str)} bytes")
         return Response(xml_str, mimetype='application/xml')
 
     except Exception as e:
         print(f"ERROR en city-find: {str(e)}")
+        traceback.print_exc()
         return Response('<?xml version="1.0"?><adc_database></adc_database>', 
                        mimetype='application/xml')
 
@@ -204,61 +158,102 @@ def weather_data_legacy():
     lat_raw = request.args.get('slat')
     lon_raw = request.args.get('slon')
     location_key = request.args.get('location')
+    
+    print(f"=== NUEVA PETICIÓN ===")
+    print(f"slat={lat_raw}, slon={lon_raw}, location={location_key}")
 
     try:
         lat, lon = None, None
 
-        if location_key and '_' in location_key:
-            parts = location_key.split('_')
-            lat = float(parts[0].replace('_', '.'))
-            lon = float(parts[1].replace('_', '.'))
-        elif lat_raw and lon_raw:
-            lat = float(lat_raw)
-            lon = float(lon_raw)
+        # ============================================================
+        # PRIORIDAD 1: locationKey desde búsqueda manual
+        # ============================================================
+        if location_key and location_key not in ['null', '', 'None']:
+            print(f"Procesando location_key: '{location_key}'")
+            key_clean = location_key.strip()
+            
+            # Formato con doble guion bajo (nuevo formato)
+            if '__' in key_clean:
+                try:
+                    parts = key_clean.split('__')
+                    if len(parts) == 2:
+                        lat_part = parts[0].replace('_', '.')
+                        lon_part = parts[1].replace('_', '.')
+                        lat = float(lat_part)
+                        lon = float(lon_part)
+                        print(f"Parseado con __: lat={lat}, lon={lon}")
+                except Exception as e:
+                    print(f"Error parseando formato __: {e}")
+            
+            # Formato con guion bajo simple (fallback)
+            elif '_' in key_clean:
+                try:
+                    # Regex para formato: 19_45083_-70_69472
+                    match = re.match(r'(-?\d+_\d+)__?(-?\d+_\d+)', key_clean)
+                    if match:
+                        lat_str = match.group(1).replace('_', '.')
+                        lon_str = match.group(2).replace('_', '.')
+                        lat = float(lat_str)
+                        lon = float(lon_str)
+                    else:
+                        # Dividir por el guion bajo del medio (aproximado)
+                        parts = key_clean.split('_')
+                        if len(parts) >= 2:
+                            mid = len(parts) // 2
+                            lat_str = '.'.join(['_'.join(parts[:mid])])
+                            lon_str = '.'.join(['_'.join(parts[mid:])])
+                            lat = float(lat_str)
+                            lon = float(lon_str)
+                    
+                    print(f"Parseado con _: lat={lat}, lon={lon}")
+                except Exception as e:
+                    print(f"Error parseando formato _: {e}")
 
+        # ============================================================
+        # PRIORIDAD 2: slat/slon (auto-localización)
+        # ============================================================
+        if lat is None and lat_raw and lon_raw:
+            if lat_raw not in ['null', '0.0', '0', ''] and lon_raw not in ['null', '0.0', '0', '']:
+                try:
+                    lat = float(lat_raw)
+                    lon = float(lon_raw)
+                    print(f"Usando slat/slon: {lat}, {lon}")
+                except ValueError:
+                    print(f"Error parseando slat/slon: {lat_raw}, {lon_raw}")
+
+        # ============================================================
+        # DEFAULT: Santiago
+        # ============================================================
         if lat is None or lon is None:
+            print(f"USANDO DEFAULT. lat era: {lat}, lon era: {lon}")
+            lat, lon = -33.4489, -70.6693
+        elif lat == 0.0 and lon == 0.0:
+            print("ADVERTENCIA: Coordenadas 0,0 detectadas, usando default")
             lat, lon = -33.4489, -70.6693
 
-        print(f"Consultando clima para: lat={lat}, lon={lon}")
-        print(f"Cache key: {get_cache_key(lat, lon)}")
-        print(f"Usando: {'WeatherAPI' if USE_WEATHERAPI else 'Open-Meteo'}")
+        print(f"FINAL: lat={lat}, lon={lon}")
 
         # Verificar cache
         cached_data = get_cached_weather(lat, lon)
         if cached_data:
             print("Usando datos cacheados")
-            if USE_WEATHERAPI:
-                return generate_weather_xml_weatherapi(cached_data)
-            else:
-                return generate_weather_xml_openmeteo(cached_data)
+            return generate_weather_xml_weatherapi(cached_data)
 
-        # ============================================================
-        # LLAMADA A WeatherAPI (más estable)
-        # ============================================================
-        if USE_WEATHERAPI:
-            return fetch_weatherapi(lat, lon)
-        else:
-            return fetch_openmeteo(lat, lon)
+        # Llamar a WeatherAPI
+        return fetch_weatherapi(lat, lon)
 
     except Exception as e:
         print(f"ERROR en weather-data: {str(e)}")
-        print(traceback.format_exc())
+        traceback.print_exc()
         
-        # Intentar cache viejo
         if lat and lon:
             stale_data = get_cached_weather(lat, lon)
             if stale_data:
-                print("Usando cache viejo por error")
-                if USE_WEATHERAPI:
-                    return generate_weather_xml_weatherapi(stale_data)
-                else:
-                    return generate_weather_xml_openmeteo(stale_data)
+                return generate_weather_xml_weatherapi(stale_data)
         
-        # Fallback
         return generate_fallback_xml()
 
 def fetch_weatherapi(lat, lon):
-    """Obtiene datos de WeatherAPI"""
     params = {
         "key": WEATHERAPI_KEY,
         "q": f"{lat},{lon}",
@@ -277,7 +272,6 @@ def fetch_weatherapi(lat, lon):
             
             if resp.status_code == 429:
                 wait_time = 2 * (attempt + 1)
-                print(f"WeatherAPI rate limit, esperando {wait_time}s...")
                 time.sleep(wait_time)
                 continue
             
@@ -295,55 +289,13 @@ def fetch_weatherapi(lat, lon):
                 continue
             raise
 
-def fetch_openmeteo(lat, lon):
-    """Obtiene datos de Open-Meteo (backup)"""
-    params = {
-        "latitude": round(lat, 2),
-        "longitude": round(lon, 2),
-        "current": "temperature_2m,relative_humidity_2m,weather_code,is_day",
-        "daily": "weather_code,temperature_2m_max,temperature_2m_min",
-        "timezone": "auto",
-        "forecast_days": 5
-    }
-    
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            rate_limit()
-            print(f"Open-Meteo intento {attempt + 1}/{max_retries}...")
-            
-            resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
-            
-            if resp.status_code == 429:
-                wait_time = 3 * (attempt + 1)
-                print(f"Open-Meteo 429, esperando {wait_time}s...")
-                time.sleep(wait_time)
-                continue
-            
-            resp.raise_for_status()
-            data = resp.json()
-            
-            print("Open-Meteo: ÉXITO")
-            set_cached_weather(lat, lon, data)
-            return generate_weather_xml_openmeteo(data)
-            
-        except Exception as e:
-            print(f"Open-Meteo error intento {attempt + 1}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(1)
-                continue
-            raise
-
 def generate_weather_xml_weatherapi(data):
-    """Genera XML desde datos de WeatherAPI"""
     try:
         current = data.get('current', {})
         forecast = data.get('forecast', {}).get('forecastday', [])
-        location = data.get('location', {})
 
         root = ET.Element("adc_database")
 
-        # Condiciones actuales
         curr_node = ET.SubElement(root, "currentconditions")
         
         temp_c = current.get('temp_c', 15)
@@ -356,9 +308,8 @@ def generate_weather_xml_weatherapi(data):
         ET.SubElement(curr_node, "weathericon").text = str(weatherapi_to_accu_icon(code, is_day))
         ET.SubElement(curr_node, "weathertext").text = weatherapi_to_text(code)
         ET.SubElement(curr_node, "humidity").text = str(current.get('humidity', 50))
-        ET.SubElement(curr_node, "isdaytime").text = "true" if is_day else "false"
+        ET.SubElement(curr_node, "isdaytime").text = "true" if is_day else "false")
 
-        # Pronóstico
         forecast_node = ET.SubElement(root, "forecast")
         
         for day_data in forecast[:5]:
@@ -387,89 +338,10 @@ def generate_weather_xml_weatherapi(data):
         return Response(xml_str, mimetype='application/xml')
         
     except Exception as e:
-        print(f"ERROR generando XML WeatherAPI: {e}")
+        print(f"ERROR generando XML: {e}")
         raise
-
-def generate_weather_xml_openmeteo(data):
-    """Genera XML desde datos de Open-Meteo (código anterior)"""
-    try:
-        current = data.get('current', {})
-        daily = data.get('daily', {})
-
-        is_day = current.get('is_day', 1) == 1
-
-        root = ET.Element("adc_database")
-
-        curr_node = ET.SubElement(root, "currentconditions")
-        ET.SubElement(curr_node, "weathertext").text = get_weather_text_openmeteo(current.get('weather_code', 0))
-        icon_code = get_accu_icon_openmeteo(current.get('weather_code', 0), is_day)
-        ET.SubElement(curr_node, "weathericon").text = str(icon_code)
-
-        temp_c = current.get('temperature_2m', 15)
-        temp_f = int(c_to_f(temp_c))
-        ET.SubElement(curr_node, "temperature").text = str(temp_f)
-
-        ET.SubElement(curr_node, "humidity").text = str(current.get('relative_humidity_2m', 50))
-        ET.SubElement(curr_node, "isdaytime").text = "true" if is_day else "false"
-
-        forecast_node = ET.SubElement(root, "forecast")
-        
-        daily_times = daily.get('time', [])
-        daily_codes = daily.get('weather_code', [])
-        daily_max = daily.get('temperature_2m_max', [])
-        daily_min = daily.get('temperature_2m_min', [])
-
-        for i in range(min(5, len(daily_times))):
-            day_node = ET.SubElement(forecast_node, "day")
-            ET.SubElement(day_node, "obsdate").text = daily_times[i]
-
-            max_c = daily_max[i] if i < len(daily_max) else 15
-            min_c = daily_min[i] if i < len(daily_min) else 10
-            
-            max_f = int(c_to_f(max_c))
-            min_f = int(c_to_f(min_c))
-
-            ET.SubElement(day_node, "hightemperature").text = str(max_f)
-            ET.SubElement(day_node, "lowtemperature").text = str(min_f)
-            
-            code = daily_codes[i] if i < len(daily_codes) else 0
-            ET.SubElement(day_node, "weathericon").text = str(get_accu_icon_openmeteo(code, True))
-            ET.SubElement(day_node, "weathertext").text = get_weather_text_openmeteo(code)
-
-        xml_str = ET.tostring(root, encoding='unicode')
-        print(f"Open-Meteo XML: {len(xml_str)} bytes")
-        return Response(xml_str, mimetype='application/xml')
-        
-    except Exception as e:
-        print(f"ERROR generando XML Open-Meteo: {e}")
-        raise
-
-def get_weather_text_openmeteo(code):
-    texts = {
-        0: "Despejado", 1: "Mayormente Despejado", 2: "Parcialmente Nublado", 3: "Nublado",
-        45: "Niebla", 48: "Niebla con Escarcha", 51: "Llovizna Ligera", 53: "Llovizna",
-        55: "Llovizna Intensa", 61: "Lluvia Ligera", 63: "Lluvia", 65: "Lluvia Fuerte",
-        71: "Nieve Ligera", 73: "Nieve", 75: "Nieve Fuerte", 77: "Granizo",
-        80: "Chubascos Ligeros", 81: "Chubascos", 82: "Chubascos Fuertes",
-        95: "Tormenta", 96: "Tormenta con Granizo", 99: "Tormenta Fuerte"
-    }
-    return texts.get(code, "Despejado")
-
-def get_accu_icon_openmeteo(code, is_day=True):
-    icons_day = {
-        0: 1, 1: 2, 2: 3, 3: 4, 45: 11, 48: 11, 51: 12, 53: 12, 55: 12,
-        61: 13, 63: 14, 65: 15, 71: 19, 73: 20, 75: 21, 77: 19,
-        80: 12, 81: 13, 82: 14, 85: 19, 86: 20, 95: 15, 96: 16, 99: 17
-    }
-    icons_night = {
-        0: 33, 1: 34, 2: 35, 3: 36, 45: 37, 48: 37, 51: 39, 53: 39, 55: 39,
-        61: 40, 63: 41, 65: 42, 71: 44, 73: 44, 75: 44, 77: 44,
-        80: 39, 81: 40, 82: 41, 85: 44, 86: 44, 95: 42, 96: 42, 99: 42
-    }
-    return icons_day.get(code, 1) if is_day else icons_night.get(code, 33)
 
 def generate_fallback_xml():
-    """XML de fallback cuando todo falla"""
     fallback = f'''<?xml version="1.0"?>
 <adc_database>
     <currentconditions>
@@ -479,24 +351,14 @@ def generate_fallback_xml():
         <humidity>50</humidity>
         <isdaytime>true</isdaytime>
     </currentconditions>
-    <forecast>
-        <day>
-            <obsdate>{datetime.now().strftime('%Y-%m-%d')}</obsdate>
-            <hightemperature>70</hightemperature>
-            <lowtemperature>60</lowtemperature>
-            <weathericon>3</weathericon>
-            <weathertext>Unavailable</weathertext>
-        </day>
-    </forecast>
 </adc_database>'''
     return Response(fallback, mimetype='application/xml')
 
 @app.route('/')
 def index():
-    api_status = "WeatherAPI (con key)" if USE_WEATHERAPI else "Open-Meteo (sin key - puede fallar)"
-    return f"<h1>TSF Weather Server</h1><p>API activa: {api_status}</p><p>Cache: {len(weather_cache)} ubicaciones</p>"
+    api_status = "WeatherAPI" if USE_WEATHERAPI else "Open-Meteo"
+    return f"<h1>TSF Weather Server</h1><p>API: {api_status}</p><p>Cache: {len(weather_cache)}</p>"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-        
