@@ -5,10 +5,7 @@ import os
 
 app = Flask(__name__)
 
-OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
-GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
-
-# Base de datos en memoria para vincular IDs con coordenadas
+# Diccionario global para vincular IDs con coordenadas
 location_db = {}
 
 def c_to_f(c):
@@ -20,33 +17,28 @@ def city_find_legacy():
     query = query.replace('+', ' ').strip()
     
     try:
-        # TSF Shell prefiere pocos resultados pero con mucha info
-        params = {"name": query, "count": 10, "language": "es", "format": "json"}
-        resp = requests.get(GEOCODING_URL, params=params, timeout=10)
-        data = resp.json()
-        results = data.get('results', [])
+        # Buscamos en Open-Meteo
+        resp = requests.get("https://geocoding-api.open-meteo.com/v1/search", 
+                            params={"name": query, "count": 10, "language": "es", "format": "json"}, timeout=10)
+        results = resp.json().get('results', [])
         
-        # Estructura de respuesta idéntica al API original de 2014
-        root = ET.Element("adc_database")
+        # XML Manual para asegurar el orden exacto de las etiquetas
+        xml = '<?xml version="1.0" encoding="utf-8" ?>\n<adc_database>\n'
         for city in results:
-            loc = ET.SubElement(root, "location")
-            
-            # Generamos un ID numérico corto (TSF a veces falla con IDs largos)
             city_id = str(abs(hash(f"{city.get('latitude')}{city.get('longitude')}")) % 100000)
             location_db[city_id] = {"lat": city.get('latitude'), "lon": city.get('longitude')}
             
-            # Estas 3 etiquetas son el estándar "sagrado" de AccuWeather
-            ET.SubElement(loc, "city").text = city.get('name', 'Ciudad')
-            ET.SubElement(loc, "state").text = city.get('admin1', city.get('country', ''))
-            ET.SubElement(loc, "locationKey").text = city_id
-            
-            # IMPORTANTE: TSF Shell busca esta etiqueta para llenar la lista visual
-            ET.SubElement(loc, "cityname").text = f"{city.get('name')}, {city.get('country_code')}"
-
-        xml_str = '<?xml version="1.0" encoding="utf-8" ?>' + ET.tostring(root, encoding='unicode')
-        return Response(xml_str, mimetype='application/xml')
+            xml += '  <location>\n'
+            xml += f'    <city>{city.get("name")}</city>\n'
+            xml += f'    <state>{city.get("admin1", "ST")}</state>\n'
+            xml += f'    <locationKey>{city_id}</locationKey>\n'
+            xml += f'    <cityname>{city.get("name")}, {city.get("country_code")}</cityname>\n'
+            xml += '  </location>\n'
+        xml += '</adc_database>'
+        
+        return Response(xml, mimetype='text/xml')
     except:
-        return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='application/xml')
+        return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='text/xml')
 
 @app.route('/widget/androiddoes/weather-data.asp')
 def weather_data_legacy():
@@ -54,63 +46,57 @@ def weather_data_legacy():
     lon_raw = request.args.get('slon')
     location_key = request.args.get('location')
     
-    lat, lon = None, None
     try:
-        # Prioridad 1: Si viene por búsqueda manual (ID de nuestra memoria)
+        lat, lon = None, None
         if location_key and location_key in location_db:
-            coords = location_db[location_key]
-            lat, lon = coords['lat'], coords['lon']
-        # Prioridad 2: Si viene por Fake GPS / Auto ubicación
+            lat, lon = location_db[location_key]['lat'], location_db[location_key]['lon']
         elif lat_raw and lon_raw:
             lat, lon = float(lat_raw), float(lon_raw)
         
         if lat is None: lat, lon = -33.44, -70.66
 
-        params = {
+        # Datos de clima
+        w_resp = requests.get("https://api.open-meteo.com/v1/forecast", params={
             "latitude": lat, "longitude": lon,
             "current": ["temperature_2m", "relative_humidity_2m", "weather_code", "is_day"],
             "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min"],
             "timezone": "auto", "forecast_days": 5
-        }
-        
-        data = requests.get(OPEN_METEO_URL, params=params, timeout=10).json()
-        current = data.get('current', {})
+        }, timeout=10)
+        data = w_resp.json()
+        curr = data.get('current', {})
         daily = data.get('daily', {})
-        is_day = current.get('is_day', 1) == 1
-        
-        root = ET.Element("adc_database")
-        
-        # Bloque de condiciones actuales
-        curr = ET.SubElement(root, "currentconditions")
-        # El widget necesita este texto para no quedar en blanco
-        ET.SubElement(curr, "weathertext").text = "Sunny" if is_day else "Clear"
-        icon_val = get_accu_icon(current.get('weather_code', 0), is_day)
-        ET.SubElement(curr, "weathericon").text = str(icon_val).zfill(2)
-        ET.SubElement(curr, "temperature").text = str(c_to_f(current.get('temperature_2m', 15)))
-        ET.SubElement(curr, "humidity").text = str(int(current.get('relative_humidity_2m', 50)))
-        ET.SubElement(curr, "isdaytime").text = "true" if is_day else "false"
-        
-        # Pronóstico
-        forecast = ET.SubElement(root, "forecast")
-        for i in range(min(5, len(daily.get('time', [])))):
-            day = ET.SubElement(forecast, "day")
-            ET.SubElement(day, "obsdate").text = daily.get('time', [])[i]
-            ET.SubElement(day, "hightemperature").text = str(c_to_f(daily.get('temperature_2m_max', [])[i]))
-            ET.SubElement(day, "lowtemperature").text = str(c_to_f(daily.get('temperature_2m_min', [])[i]))
-            ET.SubElement(day, "weathericon").text = str(get_accu_icon(daily.get('weather_code', [])[i], True)).zfill(2)
-        
-        xml_output = '<?xml version="1.0" encoding="utf-8" ?>' + ET.tostring(root, encoding='unicode')
-        return Response(xml_output, mimetype='application/xml')
-    except:
-        return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='application/xml')
+        is_day = curr.get('is_day', 1) == 1
 
-def get_accu_icon(code, is_day=True):
-    icons = {0: 1, 1: 2, 2: 3, 3: 6, 45: 11, 51: 12, 61: 13, 63: 15, 80: 18, 95: 16}
-    icon = icons.get(code, 1)
-    if not is_day:
-        night_icons = {1: 33, 2: 34, 3: 35, 6: 36}
-        return night_icons.get(icon, icon + 32 if icon <= 8 else icon)
-    return icon
+        # Construcción manual del XML de clima (evita errores de 259 bytes)
+        xml = '<?xml version="1.0" encoding="utf-8" ?>\n<adc_database>\n'
+        xml += '  <units><temp>f</temp><dist>m</dist></units>\n'
+        xml += '  <currentconditions>\n'
+        xml += f'    <weathertext>Clear</weathertext>\n'
+        
+        # Lógica de iconos
+        icon = {0:1, 1:2, 2:3, 3:6, 45:11, 51:12, 61:13, 80:18, 95:16}.get(curr.get('weather_code', 0), 1)
+        if not is_day and icon <= 5: icon += 32
+        
+        xml += f'    <weathericon>{str(icon).zfill(2)}</weathericon>\n'
+        xml += f'    <temperature>{c_to_f(curr.get("temperature_2m", 15))}</temperature>\n'
+        xml += f'    <humidity>{int(curr.get("relative_humidity_2m", 50))}</humidity>\n'
+        xml += f'    <isdaytime>{"true" if is_day else "false"}</isdaytime>\n'
+        xml += '  </currentconditions>\n'
+        
+        xml += '  <forecast>\n'
+        for i in range(5):
+            xml += '    <day>\n'
+            xml += f'      <obsdate>{daily.get("time")[i]}</obsdate>\n'
+            xml += f'      <hightemperature>{c_to_f(daily.get("temperature_2m_max")[i])}</hightemperature>\n'
+            xml += f'      <lowtemperature>{c_to_f(daily.get("temperature_2m_min")[i])}</lowtemperature>\n'
+            xml += f'      <weathericon>01</weathericon>\n'
+            xml += '    </day>\n'
+        xml += '  </forecast>\n'
+        xml += '</adc_database>'
+        
+        return Response(xml, mimetype='text/xml')
+    except:
+        return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='text/xml')
 
 @app.route('/')
 def index(): return "TSF Active"
