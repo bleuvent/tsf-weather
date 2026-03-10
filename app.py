@@ -1,90 +1,125 @@
 from flask import Flask, request, Response
 import requests
+import xml.etree.ElementTree as ET
 import os
 
 app = Flask(__name__)
 
+OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+
+# Diccionario en memoria para las coordenadas
+location_db = {}
+
 def c_to_f(c):
-    try:
-        return int((c * 9/5) + 32)
-    except:
-        return 0
+    return int((c * 9/5) + 32)
 
 @app.route('/widget/androiddoes/city-find.asp')
-def city_find():
-    q = request.args.get('location', '').replace('+', ' ').strip()
+def city_find_legacy():
+    query = request.args.get('location', '')
+    query = query.replace('+', ' ').strip()
+    
     try:
-        # Búsqueda simple
-        r = requests.get(f"https://geocoding-api.open-meteo.com/v1/search?name={q}&count=5&format=json", timeout=10)
-        data = r.json().get('results', [])
+        params = {"name": query, "count": 8, "language": "es", "format": "json"}
+        resp = requests.get(GEOCODING_URL, params=params, timeout=10)
+        data = resp.json()
+        results = data.get('results', [])
         
-        xml = '<?xml version="1.0" encoding="utf-8" ?>\n<adc_database>\n'
-        for item in data:
-            # Enviamos lat,lon como ID para que no se pierda al reiniciar el servidor
-            lkey = f"{item.get('latitude')},{item.get('longitude')}"
-            xml += '  <location>\n'
-            xml += f'    <city>{item.get("name")}</city>\n'
-            xml += f'    <state>{item.get("admin1", "ST")}</state>\n'
-            xml += f'    <locationKey>{lkey}</locationKey>\n'
-            xml += '  </location>\n'
-        xml += '</adc_database>'
-        return Response(xml, mimetype='application/xml')
-    except:
-        return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='application/xml')
+        # Estructura ultra-completa basada en el API de AccuWeather 2014
+        root = ET.Element("adc_database")
+        for city in results:
+            loc = ET.SubElement(root, "location")
+            
+            # Generamos un ID que parezca real (entero positivo)
+            city_id = str(abs(hash(f"{city.get('latitude')}{city.get('longitude')}")) % 1000000)
+            location_db[city_id] = {"lat": city.get('latitude'), "lon": city.get('longitude')}
+            
+            # TSF Shell busca estas etiquetas en este orden exacto:
+            ET.SubElement(loc, "city").text = city.get('name', 'City')
+            ET.SubElement(loc, "state").text = city.get('admin1', city.get('country', ''))
+            ET.SubElement(loc, "locationKey").text = city_id
+            
+            # ETIQUETAS DE COMPATIBILIDAD (El truco para quitar el "Null")
+            ET.SubElement(loc, "localizedname").text = city.get('name', 'City')
+            ET.SubElement(loc, "englishname").text = city.get('name', 'City')
+            ET.SubElement(loc, "country").text = city.get('country_code', 'XX')
+            ET.SubElement(loc, "key").text = city_id
+            ET.SubElement(loc, "type").text = "City"
+
+        xml_str = '<?xml version="1.0" encoding="utf-8" ?>' + ET.tostring(root, encoding='unicode')
+        return Response(xml_str, mimetype='application/xml')
+    except Exception as e:
+        return Response(f'<?xml version="1.0"?><adc_database><error>{str(e)}</error></adc_database>', mimetype='application/xml')
 
 @app.route('/widget/androiddoes/weather-data.asp')
-def weather_data():
-    lat = request.args.get('slat')
-    lon = request.args.get('slon')
-    lkey = request.args.get('location')
-
+def weather_data_legacy():
+    lat_raw = request.args.get('slat')
+    lon_raw = request.args.get('slon')
+    location_key = request.args.get('location')
+    
+    lat, lon = None, None
     try:
-        # Si el widget pide una ciudad de la lista, extraemos lat/lon del ID
-        if lkey and ',' in lkey:
-            lat, lon = lkey.split(',')
+        if location_key and location_key in location_db:
+            coords = location_db[location_key]
+            lat, lon = coords['lat'], coords['lon']
+        elif lat_raw and lon_raw:
+            lat, lon = float(lat_raw), float(lon_raw)
         
-        if not lat or not lon:
-            lat, lon = -33.44, -70.66 # Santiago por defecto si falla el GPS
+        if lat is None: lat, lon = -33.44, -70.66
 
-        # Llamada a la API (idéntica a la que te funcionó antes)
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,weather_code,is_day&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto"
-        res = requests.get(url, timeout=10).json()
+        params = {
+            "latitude": lat, "longitude": lon,
+            "current": ["temperature_2m", "relative_humidity_2m", "weather_code", "is_day"],
+            "daily": ["weather_code", "temperature_2m_max", "temperature_2m_min"],
+            "timezone": "auto", "forecast_days": 5
+        }
         
-        curr = res.get('current', {})
-        daily = res.get('daily', {})
-        is_day = curr.get('is_day') == 1
+        data = requests.get(OPEN_METEO_URL, params=params, timeout=10).json()
+        current = data.get('current', {})
+        daily = data.get('daily', {})
+        is_day = current.get('is_day') == 1
         
-        # Lógica de iconos de AccuWeather (Luna incluida)
-        code = curr.get('weather_code', 0)
-        icon = {0:1, 1:2, 2:3, 3:6, 45:11, 51:12, 61:13, 80:18, 95:16}.get(code, 1)
-        if not is_day and icon <= 5: icon += 32 
-
-        xml = '<?xml version="1.0" encoding="utf-8" ?>\n<adc_database>\n'
-        xml += '  <currentconditions>\n'
-        xml += f'    <weathertext>Sunny</weathertext>\n'
-        xml += f'    <weathericon>{str(icon).zfill(2)}</weathericon>\n'
-        xml += f'    <temperature>{c_to_f(curr.get("temperature_2m"))}</temperature>\n'
-        xml += f'    <humidity>{curr.get("relative_humidity_2m")}</humidity>\n'
-        xml += f'    <isdaytime>{"true" if is_day else "false"}</isdaytime>\n'
-        xml += '  </currentconditions>\n'
-        xml += '  <forecast>\n'
-        for i in range(5):
-            xml += '    <day>\n'
-            xml += f'      <obsdate>{daily.get("time")[i]}</obsdate>\n'
-            xml += f'      <hightemperature>{c_to_f(daily.get("temperature_2m_max")[i])}</hightemperature>\n'
-            xml += f'      <lowtemperature>{c_to_f(daily.get("temperature_2m_min")[i])}</lowtemperature>\n'
-            xml += '      <weathericon>01</weathericon>\n'
-            xml += '    </day>\n'
-        xml += '  </forecast>\n</adc_database>'
+        root = ET.Element("adc_database")
         
-        return Response(xml, mimetype='application/xml')
+        # Cabecera de unidades
+        units = ET.SubElement(root, "units")
+        ET.SubElement(units, "temp").text = "f"
+        ET.SubElement(units, "dist").text = "m"
+        
+        # Condiciones actuales
+        curr = ET.SubElement(root, "currentconditions")
+        ET.SubElement(curr, "weathertext").text = "Sunny"
+        icon_val = get_accu_icon(current.get('weather_code', 0), is_day)
+        ET.SubElement(curr, "weathericon").text = str(icon_val).zfill(2)
+        ET.SubElement(curr, "temperature").text = str(c_to_f(current.get('temperature_2m', 15)))
+        ET.SubElement(curr, "humidity").text = str(int(current.get('relative_humidity_2m', 50)))
+        ET.SubElement(curr, "isdaytime").text = "true" if is_day else "false"
+        ET.SubElement(curr, "url").text = "http://www.accuweather.com"
+        
+        # Pronóstico
+        forecast = ET.SubElement(root, "forecast")
+        for i in range(min(5, len(daily.get('time', [])))):
+            day = ET.SubElement(forecast, "day")
+            ET.SubElement(day, "obsdate").text = daily.get('time', [])[i]
+            ET.SubElement(day, "hightemperature").text = str(c_to_f(daily.get('temperature_2m_max', [])[i]))
+            ET.SubElement(day, "lowtemperature").text = str(c_to_f(daily.get('temperature_2m_min', [])[i]))
+            ET.SubElement(day, "weathericon").text = str(get_accu_icon(daily.get('weather_code', [])[i], True)).zfill(2)
+        
+        xml_output = '<?xml version="1.0" encoding="utf-8" ?>' + ET.tostring(root, encoding='unicode')
+        return Response(xml_output, mimetype='application/xml')
     except:
-        # Si algo falla, devolvemos un XML mínimo para que no salga el signo "?"
         return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='application/xml')
 
+def get_accu_icon(code, is_day=True):
+    icons = {0: 1, 1: 2, 2: 3, 3: 6, 45: 11, 51: 12, 61: 13, 63: 15, 80: 18, 95: 16}
+    icon = icons.get(code, 1)
+    if not is_day:
+        night_icons = {1: 33, 2: 34, 3: 35, 6: 36}
+        return night_icons.get(icon, icon + 32 if icon <= 8 else icon)
+    return icon
+
 @app.route('/')
-def home(): return "TSF Ready"
+def index(): return "TSF Active"
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
