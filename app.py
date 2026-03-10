@@ -50,7 +50,7 @@ def weather_data():
         
         curr = res.get('current', {})
         daily = res.get('daily', {})
-        is_day = curr.get('is_day') == 1
+        is_day = curr.get('is_day', 1) == 1
         
         code = curr.get('weather_code', 0)
         icons = {0:1, 1:2, 2:3, 3:6, 45:11, 51:12, 61:13, 80:18, 95:16}
@@ -62,29 +62,33 @@ def weather_data():
         xml += '    <weathertext>Sunny</weathertext>\n'
         xml += f'    <weathericon>{str(icon_val).zfill(2)}</weathericon>\n'
         xml += f'    <temperature>{c_to_f(curr.get("temperature_2m"))}</temperature>\n'
-        xml += f'    <humidity>{curr.get("relative_humidity_2m", 50)}</humidity>\n'
+        xml += f'    <humidity>{int(curr.get("relative_humidity_2m", 50))}</humidity>\n'
         xml += f'    <isdaytime>{"true" if is_day else "false"}</isdaytime>\n'
+        xml += '    <url>http://www.accuweather.com</url>\n'
         xml += '  </currentconditions>\n'
         
         xml += '  <forecast>\n'
-        # Aseguramos que existan datos diarios para no romper el bucle
-        days = daily.get('time', [])
-        for i in range(min(5, len(days))):
+        days_time = daily.get('time', [])
+        highs = daily.get('temperature_2m_max', [])
+        lows = daily.get('temperature_2m_min', [])
+        
+        for i in range(min(5, len(days_time))):
             xml += '    <day>\n'
-            xml += f'      <obsdate>{days[i]}</obsdate>\n'
-            xml += f'      <hightemperature>{c_to_f(daily.get("temperature_2m_max", [])[i])}</hightemperature>\n'
-            xml += f'      <lowtemperature>{c_to_f(daily.get("temperature_2m_min", [])[i])}</lowtemperature>\n'
+            xml += f'      <obsdate>{days_time[i]}</obsdate>\n'
+            xml += f'      <hightemperature>{c_to_f(highs[i])}</hightemperature>\n'
+            xml += f'      <lowtemperature>{c_to_f(lows[i])}</lowtemperature>\n'
             xml += '      <weathericon>01</weathericon>\n'
             xml += '    </day>\n'
         xml += '  </forecast>\n</adc_database>'
         
         return Response(xml, mimetype='application/xml')
-    except Exception as e:
-        # Si algo falla, devolvemos un clima ficticio para que el widget no se rompa
-        return Response('<?xml version="1.0"?><adc_database><currentconditions><temperature>60</temperature><weathericon>01</weathericon></currentconditions></adc_database>', mimetype='application/xml')
+    except Exception:
+        # Fallback de emergencia
+        return Response('<?xml version="1.0"?><adc_database><currentconditions><temperature>60</temperature><weathericon>01</weathericon><url>http://www.accuweather.com</url></currentconditions></adc_database>', mimetype='application/xml')
 
 @app.route('/')
-def home(): return "TSF Ready"
+def home():
+    return "TSF Server Online"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
