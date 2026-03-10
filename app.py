@@ -1,14 +1,40 @@
 from flask import Flask, request, Response
 import requests
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import traceback
+import time
+import hashlib
 
 app = Flask(__name__)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+
+# ============================================================
+# CACHE SIMPLE EN MEMORIA
+# ============================================================
+weather_cache = {}
+CACHE_DURATION = timedelta(minutes=15)  # Cachear por 15 minutos
+
+def get_cache_key(lat, lon):
+    """Redondear coordenadas a 2 decimales para agrupar ubicaciones cercanas"""
+    return f"{round(lat, 2)}_{round(lon, 2)}"
+
+def get_cached_weather(lat, lon):
+    key = get_cache_key(lat, lon)
+    if key in weather_cache:
+        data, timestamp = weather_cache[key]
+        if datetime.now() - timestamp < CACHE_DURATION:
+            print(f"CACHE HIT: {key}")
+            return data
+    return None
+
+def set_cached_weather(lat, lon, data):
+    key = get_cache_key(lat, lon)
+    weather_cache[key] = (data, datetime.now())
+    print(f"CACHE SET: {key}")
 
 def c_to_f(c):
     """Convierte Celsius a Fahrenheit."""
@@ -32,7 +58,7 @@ def city_find_legacy():
         }
 
         resp = requests.get(GEOCODING_URL, params=params, timeout=10)
-        resp.raise_for_status()  # ← IMPORTANTE: Verificar errores HTTP
+        resp.raise_for_status()
         data = resp.json()
         results = data.get('results', [])
 
@@ -62,7 +88,6 @@ def city_find_legacy():
 
     except Exception as e:
         print(f"ERROR en city-find: {str(e)}")
-        print(traceback.format_exc())
         return Response('<?xml version="1.0"?><adc_database></adc_database>', 
                        mimetype='application/xml')
 
@@ -86,9 +111,19 @@ def weather_data_legacy():
         if lat is None or lon is None:
             lat, lon = -33.4489, -70.6693
 
-        print(f"Consultando clima para: lat={lat}, lon={lon}")  # ← DEBUG
+        print(f"Consultando clima para: lat={lat}, lon={lon}")
 
-        # ← CORREGIDO: Open-Meteo espera parámetros separados por comas, no listas Python
+        # ============================================================
+        # VERIFICAR CACHE PRIMERO
+        # ============================================================
+        cached_data = get_cached_weather(lat, lon)
+        if cached_data:
+            print("Usando datos cacheados")
+            return generate_weather_xml(cached_data)
+
+        # ============================================================
+        # LLAMADA A OPEN-METEO CON MANEJO DE RATE LIMIT
+        # ============================================================
         params = {
             "latitude": lat,
             "longitude": lon,
@@ -98,16 +133,48 @@ def weather_data_legacy():
             "forecast_days": 5
         }
 
+        # Esperar un poco para no saturar (rate limiting cliente)
+        time.sleep(0.5)
+        
         resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
-        resp.raise_for_status()  # ← Verificar errores HTTP
+        
+        # Si es 429, esperar y reintentar una vez
+        if resp.status_code == 429:
+            print("Rate limitado, esperando 2 segundos...")
+            time.sleep(2)
+            resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
+        
+        resp.raise_for_status()
         data = resp.json()
         
-        print(f"Respuesta Open-Meteo: {data}")  # ← DEBUG
+        print(f"Respuesta Open-Meteo recibida")
+        
+        # Guardar en cache
+        set_cached_weather(lat, lon, data)
+        
+        return generate_weather_xml(data)
 
+    except Exception as e:
+        print(f"ERROR en weather-data: {str(e)}")
+        print(traceback.format_exc())
+        
+        # Intentar usar cache viejo si existe (stale cache)
+        if lat and lon:
+            stale_data = get_cached_weather(lat, lon)
+            if stale_data:
+                print("Usando cache viejo por error")
+                return generate_weather_xml(stale_data)
+        
+        # Fallback final
+        fallback = '''<?xml version="1.0"?><adc_database><currentconditions><temperature>60</temperature><weathericon>1</weathericon><weathertext>Service Temporarily Unavailable</weathertext></currentconditions></adc_database>'''
+        return Response(fallback, mimetype='application/xml')
+
+def generate_weather_xml(data):
+    """Genera el XML para TSF Shell desde datos de Open-Meteo"""
+    try:
         current = data.get('current', {})
         daily = data.get('daily', {})
 
-        # ← CORREGIDO: Verificar que tenemos datos válidos
         if not current or not daily:
             raise ValueError("Datos incompletos de Open-Meteo")
 
@@ -131,7 +198,6 @@ def weather_data_legacy():
         # Pronóstico
         forecast_node = ET.SubElement(root, "forecast")
         
-        # ← CORREGIDO: Verificar que daily tiene datos antes de iterar
         daily_times = daily.get('time', [])
         daily_codes = daily.get('weather_code', [])
         daily_max = daily.get('temperature_2m_max', [])
@@ -144,7 +210,6 @@ def weather_data_legacy():
             day_node = ET.SubElement(forecast_node, "day")
             ET.SubElement(day_node, "obsdate").text = daily_times[i]
 
-            # ← CORREGIDO: Verificar índices antes de acceder
             max_c = daily_max[i] if i < len(daily_max) else 15
             min_c = daily_min[i] if i < len(daily_min) else 10
             
@@ -159,15 +224,12 @@ def weather_data_legacy():
             ET.SubElement(day_node, "weathertext").text = get_weather_text(code)
 
         xml_str = ET.tostring(root, encoding='unicode')
-        print(f"XML generado: {xml_str[:200]}...")  # ← DEBUG
+        print(f"XML generado: {len(xml_str)} bytes")
         return Response(xml_str, mimetype='application/xml')
-
+        
     except Exception as e:
-        print(f"ERROR en weather-data: {str(e)}")
-        print(traceback.format_exc())
-        # XML de fallback para que TSF no se rompa
-        fallback = '''<?xml version="1.0"?><adc_database><currentconditions><temperature>60</temperature><weathericon>1</weathericon><weathertext>Error</weathertext></currentconditions></adc_database>'''
-        return Response(fallback, mimetype='application/xml')
+        print(f"ERROR generando XML: {str(e)}")
+        raise
 
 def get_weather_text(code):
     texts = {
@@ -195,7 +257,7 @@ def get_accu_icon(code, is_day=True):
 
 @app.route('/')
 def index():
-    return "<h1>TSF Weather Server (Proyecto Fénix)</h1><p>Servidor activo y escuchando...</p>"
+    return "<h1>TSF Weather Server (Proyecto Fénix)</h1><p>Servidor activo con caching...</p>"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
