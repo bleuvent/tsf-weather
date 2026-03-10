@@ -18,6 +18,7 @@ def city_find_legacy():
     query = query.replace('+', ' ').strip()
     
     try:
+        # Reducimos a 5 resultados para no saturar
         params = {"name": query, "count": 5, "language": "es", "format": "json"}
         resp = requests.get(GEOCODING_URL, params=params, timeout=10)
         data = resp.json()
@@ -28,13 +29,14 @@ def city_find_legacy():
             loc = ET.SubElement(root, "location")
             lat = "{:.2f}".format(city.get('latitude', 0))
             lon = "{:.2f}".format(city.get('longitude', 0))
+            # TSF Shell prefiere la coma sin espacios
             legacy_key = f"{lat},{lon}"
             
-            # TSF Shell es muy sensible a estas etiquetas exactas
+            # ORDEN CRITICO: El widget lee en orden secuencial
             ET.SubElement(loc, "city").text = city.get('name', 'City')[:15]
-            ET.SubElement(loc, "state").text = city.get('admin1', city.get('country_code', ''))[:10]
+            ET.SubElement(loc, "state").text = city.get('admin1', 'ST')[:10]
             ET.SubElement(loc, "locationKey").text = legacy_key
-            # Duplicamos para asegurar compatibilidad
+            # Campos espejo para asegurar que no de Null
             ET.SubElement(loc, "cityname").text = city.get('name', 'City')[:15]
             ET.SubElement(loc, "key").text = legacy_key
 
@@ -67,36 +69,45 @@ def weather_data_legacy():
         current = data.get('current', {})
         daily = data.get('daily', {})
         
+        # FIX NOCHE: Detectar correctamente si es de día
+        is_day = current.get('is_day') == 1
+        
         root = ET.Element("adc_database")
         
-        # Nodo de condiciones actuales (Simplificado al máximo)
+        # Nodo de condiciones actuales
         curr = ET.SubElement(root, "currentconditions")
         ET.SubElement(curr, "weathertext").text = "Clear"
-        ET.SubElement(curr, "weathericon").text = str(get_accu_icon(current.get('weather_code', 0), current.get('is_day')))
+        # FIX ICONO: zfill(2) asegura que sea "01" en vez de "1", vital para TSF
+        icon_val = get_accu_icon(current.get('weather_code', 0), is_day)
+        ET.SubElement(curr, "weathericon").text = str(icon_val).zfill(2)
         ET.SubElement(curr, "temperature").text = str(c_to_f(current.get('temperature_2m', 15)))
         ET.SubElement(curr, "humidity").text = str(int(current.get('relative_humidity_2m', 50)))
         
-        # Nodo de pronóstico
+        # ETIQUETA CRITICA PARA LA NOCHE: TSF lee 'isdaytime' para cambiar el fondo/luna
+        ET.SubElement(curr, "isdaytime").text = "true" if is_day else "false"
+        
         forecast = ET.SubElement(root, "forecast")
         for i in range(min(5, len(daily.get('time', [])))):
             day = ET.SubElement(forecast, "day")
             ET.SubElement(day, "obsdate").text = daily.get('time', [])[i]
             ET.SubElement(day, "hightemperature").text = str(c_to_f(daily.get('temperature_2m_max', [])[i]))
-            ET.SubElement(day_node := day, "lowtemperature").text = str(c_to_f(daily.get('temperature_2m_min', [])[i]))
-            ET.SubElement(day, "weathericon").text = str(get_accu_icon(daily.get('weather_code', [])[i], True))
+            ET.SubElement(day, "lowtemperature").text = str(c_to_f(daily.get('temperature_2m_min', [])[i]))
+            # Iconos de pronóstico siempre modo día según estándar AccuWeather
+            ET.SubElement(day, "weathericon").text = str(get_accu_icon(daily.get('weather_code', [])[i], True)).zfill(2)
         
         xml_output = '<?xml version="1.0" encoding="utf-8" ?>' + ET.tostring(root, encoding='unicode')
         return Response(xml_output, mimetype='application/xml')
     except:
         return Response('<?xml version="1.0"?><adc_database></adc_database>', mimetype='application/xml')
 
-def get_weather_text(code):
-    return "Sunny"
-
 def get_accu_icon(code, is_day=True):
+    # Mapa de iconos corregido para la noche
     icons = {0: 1, 1: 2, 2: 3, 3: 6, 45: 11, 51: 12, 61: 13, 63: 15, 80: 18, 95: 16}
     icon = icons.get(code, 1)
-    if not is_day and icon <= 5: icon += 32 
+    if not is_day:
+        # En AccuWeather, los iconos de noche suelen ser a partir del 33
+        night_icons = {1: 33, 2: 34, 3: 35, 6: 36}
+        return night_icons.get(icon, icon)
     return icon
 
 @app.route('/')
