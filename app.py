@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import os
 import traceback
 import time
-import hashlib
+import random
 
 app = Flask(__name__)
 
@@ -13,22 +13,27 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 
 # ============================================================
-# CACHE SIMPLE EN MEMORIA
+# CACHE SIMPLE EN MEMORIA - DURACIÓN EXTENDIDA
 # ============================================================
 weather_cache = {}
-CACHE_DURATION = timedelta(minutes=15)  # Cachear por 15 minutos
+CACHE_DURATION = timedelta(minutes=30)  # Aumentado a 30 minutos
+LAST_REQUEST_TIME = 0
+MIN_REQUEST_INTERVAL = 1.0  # Segundos mínimos entre llamadas a Open-Meteo
 
 def get_cache_key(lat, lon):
-    """Redondear coordenadas a 2 decimales para agrupar ubicaciones cercanas"""
-    return f"{round(lat, 2)}_{round(lon, 2)}"
+    """Redondear coordenadas a 1 decimal (~11km) para maximizar cache hits"""
+    return f"{round(lat, 1)}_{round(lon, 1)}"
 
 def get_cached_weather(lat, lon):
     key = get_cache_key(lat, lon)
     if key in weather_cache:
         data, timestamp = weather_cache[key]
-        if datetime.now() - timestamp < CACHE_DURATION:
-            print(f"CACHE HIT: {key}")
+        age = datetime.now() - timestamp
+        if age < CACHE_DURATION:
+            print(f"CACHE HIT: {key} (age: {age.seconds}s)")
             return data
+        else:
+            print(f"CACHE STALE: {key} (age: {age.seconds}s)")
     return None
 
 def set_cached_weather(lat, lon, data):
@@ -39,6 +44,16 @@ def set_cached_weather(lat, lon, data):
 def c_to_f(c):
     """Convierte Celsius a Fahrenheit."""
     return (c * 9/5) + 32
+
+def rate_limit():
+    """Asegurar que no hagamos requests muy rápido"""
+    global LAST_REQUEST_TIME
+    elapsed = time.time() - LAST_REQUEST_TIME
+    if elapsed < MIN_REQUEST_INTERVAL:
+        sleep_time = MIN_REQUEST_INTERVAL - elapsed + random.uniform(0.1, 0.5)
+        print(f"Rate limiting: esperando {sleep_time:.2f}s")
+        time.sleep(sleep_time)
+    LAST_REQUEST_TIME = time.time()
 
 @app.route('/widget/androiddoes/city-find.asp')
 def city_find_legacy():
@@ -112,47 +127,71 @@ def weather_data_legacy():
             lat, lon = -33.4489, -70.6693
 
         print(f"Consultando clima para: lat={lat}, lon={lon}")
+        print(f"Cache key: {get_cache_key(lat, lon)}")
 
         # ============================================================
-        # VERIFICAR CACHE PRIMERO
+        # VERIFICAR CACHE PRIMERO (incluso antes de intentar API)
         # ============================================================
         cached_data = get_cached_weather(lat, lon)
         if cached_data:
-            print("Usando datos cacheados")
+            print("Usando datos cacheados - SIN LLAMADA A API")
             return generate_weather_xml(cached_data)
 
         # ============================================================
-        # LLAMADA A OPEN-METEO CON MANEJO DE RATE LIMIT
+        # LLAMADA A OPEN-METEO CON MANEJO AGRESIVO DE RATE LIMIT
         # ============================================================
+        
+        # Redondear coordenadas para la API (Open-Meteo no necesita tanta precisión)
+        api_lat = round(lat, 2)
+        api_lon = round(lon, 2)
+        
         params = {
-            "latitude": lat,
-            "longitude": lon,
+            "latitude": api_lat,
+            "longitude": api_lon,
             "current": "temperature_2m,relative_humidity_2m,weather_code,is_day",
             "daily": "weather_code,temperature_2m_max,temperature_2m_min",
             "timezone": "auto",
             "forecast_days": 5
         }
 
-        # Esperar un poco para no saturar (rate limiting cliente)
-        time.sleep(0.5)
+        headers = {
+            "User-Agent": "TSF-Weather-Proxy/1.0 (Personal Project; Contact: none)"  # Identificación
+        }
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                rate_limit()  # Esperar si es necesario
+                
+                print(f"Intento {attempt + 1}/{max_retries} a Open-Meteo...")
+                resp = requests.get(OPEN_METEO_URL, params=params, headers=headers, timeout=10)
+                
+                if resp.status_code == 429:
+                    # Si es 429, esperar más y reintentar
+                    wait_time = 3 * (attempt + 1)  # 3s, 6s, 9s
+                    print(f"Rate limitado (429), esperando {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                
+                resp.raise_for_status()
+                data = resp.json()
+                
+                print(f"ÉXITO: Datos recibidos de Open-Meteo")
+                
+                # Guardar en cache INMEDIATAMENTE
+                set_cached_weather(lat, lon, data)
+                
+                return generate_weather_xml(data)
+                
+            except requests.exceptions.HTTPError as e:
+                if attempt < max_retries - 1:
+                    print(f"Error HTTP en intento {attempt + 1}: {e}")
+                    time.sleep(2)
+                    continue
+                raise
         
-        resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
-        
-        # Si es 429, esperar y reintentar una vez
-        if resp.status_code == 429:
-            print("Rate limitado, esperando 2 segundos...")
-            time.sleep(2)
-            resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
-        
-        resp.raise_for_status()
-        data = resp.json()
-        
-        print(f"Respuesta Open-Meteo recibida")
-        
-        # Guardar en cache
-        set_cached_weather(lat, lon, data)
-        
-        return generate_weather_xml(data)
+        # Si llegamos aquí, todos los reintentos fallaron
+        raise Exception("Todos los reintentos fallaron")
 
     except Exception as e:
         print(f"ERROR en weather-data: {str(e)}")
@@ -165,8 +204,26 @@ def weather_data_legacy():
                 print("Usando cache viejo por error")
                 return generate_weather_xml(stale_data)
         
-        # Fallback final
-        fallback = '''<?xml version="1.0"?><adc_database><currentconditions><temperature>60</temperature><weathericon>1</weathericon><weathertext>Service Temporarily Unavailable</weathertext></currentconditions></adc_database>'''
+        # Fallback final con datos más realistas
+        fallback = f'''<?xml version="1.0"?>
+<adc_database>
+    <currentconditions>
+        <temperature>65</temperature>
+        <weathericon>3</weathericon>
+        <weathertext>Data Temporarily Unavailable</weathertext>
+        <humidity>50</humidity>
+        <isdaytime>true</isdaytime>
+    </currentconditions>
+    <forecast>
+        <day>
+            <obsdate>{datetime.now().strftime('%Y-%m-%d')}</obsdate>
+            <hightemperature>70</hightemperature>
+            <lowtemperature>60</lowtemperature>
+            <weathericon>3</weathericon>
+            <weathertext>Unavailable</weathertext>
+        </day>
+    </forecast>
+</adc_database>'''
         return Response(fallback, mimetype='application/xml')
 
 def generate_weather_xml(data):
@@ -257,9 +314,8 @@ def get_accu_icon(code, is_day=True):
 
 @app.route('/')
 def index():
-    return "<h1>TSF Weather Server (Proyecto Fénix)</h1><p>Servidor activo con caching...</p>"
+    return "<h1>TSF Weather Server (Proyecto Fénix)</h1><p>Servidor activo con caching agresivo...</p>"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-        
