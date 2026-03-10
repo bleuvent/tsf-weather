@@ -308,7 +308,7 @@ def generate_weather_xml_weatherapi(data):
         ET.SubElement(curr_node, "weathericon").text = str(weatherapi_to_accu_icon(code, is_day))
         ET.SubElement(curr_node, "weathertext").text = weatherapi_to_text(code)
         ET.SubElement(curr_node, "humidity").text = str(current.get('humidity', 50))
-        ET.SubElement(curr_node, "isdaytime").text = "true" if is_day else "false")
+        ET.SubElement(curr_node, "isdaytime").text = "true" if is_day else "false"
 
         forecast_node = ET.SubElement(root, "forecast")
         
