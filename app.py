@@ -155,13 +155,27 @@ def city_find_legacy():
 
 @app.route('/widget/androiddoes/weather-data.asp')
 def weather_data_legacy():
+    # ============================================================
+    # DEBUG: Loggear TODOS los parámetros recibidos
+    # ============================================================
+    print(f"=== TODOS LOS PARAMS: {dict(request.args)} ===")
+    print(f"URL completa: {request.url}")
+    
     lat_raw = request.args.get('slat')
     lon_raw = request.args.get('slon')
     location_key = request.args.get('location')
+    # Algunas versiones usan locationKey (con K mayúscula) en lugar de location
+    location_key_alt = request.args.get('locationKey')
     
-    print(f"=== NUEVA PETICIÓN ===")
-    print(f"slat={lat_raw}, slon={lon_raw}, location={location_key}")
-
+    print(f"slat={lat_raw}, slon={lon_raw}")
+    print(f"location={location_key}")
+    print(f"locationKey={location_key_alt}")
+    
+    # Usar locationKey alternativo si location está vacío
+    if not location_key and location_key_alt:
+        location_key = location_key_alt
+        print(f"Usando locationKey (K mayúscula): {location_key}")
+    
     try:
         lat, lon = None, None
 
@@ -362,3 +376,4 @@ def index():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
+    
