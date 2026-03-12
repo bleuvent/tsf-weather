@@ -117,26 +117,20 @@ def city_find_legacy():
             lat = city.get('latitude', 0)
             lon = city.get('longitude', 0)
 
-            # ============================================================
-            # FORMATO CORREGIDO: Doble guion bajo para separar lat/lon
-            # ============================================================
+            # Formato: 19_450830__-70_694720 (doble guion bajo entre lat y lon)
             lat_str = f"{lat:+.6f}"
             lon_str = f"{lon:+.6f}"
-
-            # Formato: 19_450830__-70_694720 (doble guion bajo entre lat y lon)
             safe_key = f"{lat_str.replace('.', '_').replace('+', '')}__{lon_str.replace('.', '_').replace('+', '')}"
 
             print(f"Generando key: {safe_key} para {city.get('name')}")
 
             # ============================================================
-            # ETIQUETAS SIMPLIFICADAS - Solo minúsculas, sin duplicados
+            # VERSIÓN CON ETIQUETAS CAPITALIZADAS (como AccuWeather original)
             # ============================================================
-            ET.SubElement(loc, "city").text = city.get('name', 'Unknown')
-            ET.SubElement(loc, "state").text = city.get('admin1', city.get('country', ''))
-            ET.SubElement(loc, "country").text = city.get('country', 'XX')
-            ET.SubElement(loc, "key").text = safe_key
-            ET.SubElement(loc, "latitude").text = str(lat)
-            ET.SubElement(loc, "longitude").text = str(lon)
+            ET.SubElement(loc, "City").text = city.get('name', 'Unknown')
+            ET.SubElement(loc, "State").text = city.get('admin1', city.get('country', ''))
+            ET.SubElement(loc, "Country").text = city.get('country', 'XX')
+            ET.SubElement(loc, "locationKey").text = safe_key
 
         xml_str = ET.tostring(root, encoding='unicode')
         print(f"XML generado para '{query}': {len(xml_str)} bytes")
@@ -150,23 +144,18 @@ def city_find_legacy():
 
 @app.route('/widget/androiddoes/weather-data.asp')
 def weather_data_legacy():
-    # ============================================================
-    # DEBUG: Loggear TODOS los parámetros recibidos
-    # ============================================================
     print(f"=== TODOS LOS PARAMS: {dict(request.args)} ===")
     print(f"URL completa: {request.url}")
 
     lat_raw = request.args.get('slat')
     lon_raw = request.args.get('slon')
     location_key = request.args.get('location')
-    # Algunas versiones usan locationKey (con K mayúscula) en lugar de location
     location_key_alt = request.args.get('locationKey')
 
     print(f"slat={lat_raw}, slon={lon_raw}")
     print(f"location={location_key}")
     print(f"locationKey={location_key_alt}")
 
-    # Usar locationKey alternativo si location está vacío
     if not location_key and location_key_alt:
         location_key = location_key_alt
         print(f"Usando locationKey (K mayúscula): {location_key}")
@@ -174,14 +163,10 @@ def weather_data_legacy():
     try:
         lat, lon = None, None
 
-        # ============================================================
-        # PRIORIDAD 1: locationKey desde búsqueda manual
-        # ============================================================
         if location_key and location_key not in ['null', '', 'None']:
             print(f"Procesando location_key: '{location_key}'")
             key_clean = location_key.strip()
 
-            # Formato con doble guion bajo (nuevo formato)
             if '__' in key_clean:
                 try:
                     parts = key_clean.split('__')
@@ -194,10 +179,8 @@ def weather_data_legacy():
                 except Exception as e:
                     print(f"Error parseando formato __: {e}")
 
-            # Formato con guion bajo simple (fallback)
             elif '_' in key_clean:
                 try:
-                    # Regex para formato: 19_45083_-70_69472
                     match = re.match(r'(-?\d+_\d+)__?(-?\d+_\d+)', key_clean)
                     if match:
                         lat_str = match.group(1).replace('_', '.')
@@ -205,7 +188,6 @@ def weather_data_legacy():
                         lat = float(lat_str)
                         lon = float(lon_str)
                     else:
-                        # Dividir por el guion bajo del medio (aproximado)
                         parts = key_clean.split('_')
                         if len(parts) >= 2:
                             mid = len(parts) // 2
@@ -218,9 +200,6 @@ def weather_data_legacy():
                 except Exception as e:
                     print(f"Error parseando formato _: {e}")
 
-        # ============================================================
-        # PRIORIDAD 2: slat/slon (auto-localización)
-        # ============================================================
         if lat is None and lat_raw and lon_raw:
             if lat_raw not in ['null', '0.0', '0', ''] and lon_raw not in ['null', '0.0', '0', '']:
                 try:
@@ -230,9 +209,6 @@ def weather_data_legacy():
                 except ValueError:
                     print(f"Error parseando slat/slon: {lat_raw}, {lon_raw}")
 
-        # ============================================================
-        # DEFAULT: Santiago
-        # ============================================================
         if lat is None or lon is None:
             print(f"USANDO DEFAULT. lat era: {lat}, lon era: {lon}")
             lat, lon = -33.4489, -70.6693
@@ -242,13 +218,11 @@ def weather_data_legacy():
 
         print(f"FINAL: lat={lat}, lon={lon}")
 
-        # Verificar cache
         cached_data = get_cached_weather(lat, lon)
         if cached_data:
             print("Usando datos cacheados")
             return generate_weather_xml_weatherapi(cached_data)
 
-        # Llamar a WeatherAPI
         return fetch_weatherapi(lat, lon)
 
     except Exception as e:
