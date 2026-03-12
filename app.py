@@ -93,7 +93,7 @@ def city_find_legacy():
     query = query.replace('+', ' ').replace(',', ' ').strip()
 
     if not query or len(query) < 2:
-        return Response('<?xml version="1.0"?><adc_database></adc_database>', 
+        return Response('<?xml version="1.0" encoding="UTF-8"?><adc_database></adc_database>', 
                        mimetype='application/xml')
 
     try:
@@ -109,37 +109,38 @@ def city_find_legacy():
         data = resp.json()
         results = data.get('results', [])
 
-        root = ET.Element("adc_database")
+        # Build XML manually for exact format control
+        xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<adc_database>']
 
         for city in results:
-            loc = ET.SubElement(root, "location")
-
             lat = city.get('latitude', 0)
             lon = city.get('longitude', 0)
 
-            # Formato: 19_450830__-70_694720 (doble guion bajo entre lat y lon)
-            lat_str = f"{lat:+.6f}"
-            lon_str = f"{lon:+.6f}"
-            safe_key = f"{lat_str.replace('.', '_').replace('+', '')}__{lon_str.replace('.', '_').replace('+', '')}"
+            # Format key exactly like AccuWeather: lat_lon (with underscores)
+            lat_str = str(lat).replace('.', '_').replace('-', '-')
+            lon_str = str(lon).replace('.', '_').replace('-', '-')
+            safe_key = f"{lat_str}__{lon_str}"
 
             print(f"Generando key: {safe_key} para {city.get('name')}")
 
-            # ============================================================
-            # VERSIÓN CON ETIQUETAS CAPITALIZADAS (como AccuWeather original)
-            # ============================================================
-            ET.SubElement(loc, "City").text = city.get('name', 'Unknown')
-            ET.SubElement(loc, "State").text = city.get('admin1', city.get('country', ''))
-            ET.SubElement(loc, "Country").text = city.get('country', 'XX')
-            ET.SubElement(loc, "locationKey").text = safe_key
+            # Build location element with exact AccuWeather format
+            xml_parts.append('  <location>')
+            xml_parts.append(f'    <City>{city.get("name", "Unknown")}</City>')
+            xml_parts.append(f'    <State>{city.get("admin1", city.get("country", ""))}</State>')
+            xml_parts.append(f'    <Country>{city.get("country", "XX")}</Country>')
+            xml_parts.append(f'    <locationKey>{safe_key}</locationKey>')
+            xml_parts.append('  </location>')
 
-        xml_str = ET.tostring(root, encoding='unicode')
+        xml_parts.append('</adc_database>')
+        xml_str = '\n'.join(xml_parts)
+
         print(f"XML generado para '{query}': {len(xml_str)} bytes")
         return Response(xml_str, mimetype='application/xml')
 
     except Exception as e:
         print(f"ERROR en city-find: {str(e)}")
         traceback.print_exc()
-        return Response('<?xml version="1.0"?><adc_database></adc_database>', 
+        return Response('<?xml version="1.0" encoding="UTF-8"?><adc_database></adc_database>', 
                        mimetype='application/xml')
 
 @app.route('/widget/androiddoes/weather-data.asp')
@@ -325,7 +326,7 @@ def generate_weather_xml_weatherapi(data):
         raise
 
 def generate_fallback_xml():
-    fallback = """<?xml version="1.0"?>
+    fallback = """<?xml version="1.0" encoding="UTF-8"?>
 <adc_database>
     <currentconditions>
         <temperature>65</temperature>
