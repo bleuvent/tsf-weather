@@ -116,30 +116,25 @@ def city_find_legacy():
 
             lat = city.get('latitude', 0)
             lon = city.get('longitude', 0)
-            
+
             # ============================================================
             # FORMATO CORREGIDO: Doble guion bajo para separar lat/lon
             # ============================================================
             lat_str = f"{lat:+.6f}"
             lon_str = f"{lon:+.6f}"
-            
+
             # Formato: 19_450830__-70_694720 (doble guion bajo entre lat y lon)
             safe_key = f"{lat_str.replace('.', '_').replace('+', '')}__{lon_str.replace('.', '_').replace('+', '')}"
 
             print(f"Generando key: {safe_key} para {city.get('name')}")
 
-            # ETIQUETAS AccuWeather v1 (2014)
-            ET.SubElement(loc, "City").text = city.get('name', 'Unknown')
-            ET.SubElement(loc, "State").text = city.get('admin1', city.get('country', ''))
-            ET.SubElement(loc, "Country").text = city.get('country', 'XX')
-            ET.SubElement(loc, "locationKey").text = safe_key
-            ET.SubElement(loc, "key").text = safe_key
+            # ============================================================
+            # ETIQUETAS SIMPLIFICADAS - Solo minúsculas, sin duplicados
+            # ============================================================
             ET.SubElement(loc, "city").text = city.get('name', 'Unknown')
             ET.SubElement(loc, "state").text = city.get('admin1', city.get('country', ''))
             ET.SubElement(loc, "country").text = city.get('country', 'XX')
-            ET.SubElement(loc, "cityname").text = city.get('name', 'Unknown')
-            ET.SubElement(loc, "statename").text = city.get('admin1', city.get('country', ''))
-            ET.SubElement(loc, "countryname").text = city.get('country', 'XX')
+            ET.SubElement(loc, "key").text = safe_key
             ET.SubElement(loc, "latitude").text = str(lat)
             ET.SubElement(loc, "longitude").text = str(lon)
 
@@ -160,22 +155,22 @@ def weather_data_legacy():
     # ============================================================
     print(f"=== TODOS LOS PARAMS: {dict(request.args)} ===")
     print(f"URL completa: {request.url}")
-    
+
     lat_raw = request.args.get('slat')
     lon_raw = request.args.get('slon')
     location_key = request.args.get('location')
     # Algunas versiones usan locationKey (con K mayúscula) en lugar de location
     location_key_alt = request.args.get('locationKey')
-    
+
     print(f"slat={lat_raw}, slon={lon_raw}")
     print(f"location={location_key}")
     print(f"locationKey={location_key_alt}")
-    
+
     # Usar locationKey alternativo si location está vacío
     if not location_key and location_key_alt:
         location_key = location_key_alt
         print(f"Usando locationKey (K mayúscula): {location_key}")
-    
+
     try:
         lat, lon = None, None
 
@@ -185,7 +180,7 @@ def weather_data_legacy():
         if location_key and location_key not in ['null', '', 'None']:
             print(f"Procesando location_key: '{location_key}'")
             key_clean = location_key.strip()
-            
+
             # Formato con doble guion bajo (nuevo formato)
             if '__' in key_clean:
                 try:
@@ -198,7 +193,7 @@ def weather_data_legacy():
                         print(f"Parseado con __: lat={lat}, lon={lon}")
                 except Exception as e:
                     print(f"Error parseando formato __: {e}")
-            
+
             # Formato con guion bajo simple (fallback)
             elif '_' in key_clean:
                 try:
@@ -218,7 +213,7 @@ def weather_data_legacy():
                             lon_str = '.'.join(['_'.join(parts[mid:])])
                             lat = float(lat_str)
                             lon = float(lon_str)
-                    
+
                     print(f"Parseado con _: lat={lat}, lon={lon}")
                 except Exception as e:
                     print(f"Error parseando formato _: {e}")
@@ -259,12 +254,12 @@ def weather_data_legacy():
     except Exception as e:
         print(f"ERROR en weather-data: {str(e)}")
         traceback.print_exc()
-        
+
         if lat and lon:
             stale_data = get_cached_weather(lat, lon)
             if stale_data:
                 return generate_weather_xml_weatherapi(stale_data)
-        
+
         return generate_fallback_xml()
 
 def fetch_weatherapi(lat, lon):
@@ -275,27 +270,27 @@ def fetch_weatherapi(lat, lon):
         "aqi": "no",
         "alerts": "no"
     }
-    
+
     max_retries = 3
     for attempt in range(max_retries):
         try:
             rate_limit()
             print(f"WeatherAPI intento {attempt + 1}/{max_retries}...")
-            
+
             resp = requests.get(WEATHERAPI_URL, params=params, timeout=10)
-            
+
             if resp.status_code == 429:
                 wait_time = 2 * (attempt + 1)
                 time.sleep(wait_time)
                 continue
-            
+
             resp.raise_for_status()
             data = resp.json()
-            
+
             print("WeatherAPI: ÉXITO")
             set_cached_weather(lat, lon, data)
             return generate_weather_xml_weatherapi(data)
-            
+
         except Exception as e:
             print(f"WeatherAPI error intento {attempt + 1}: {e}")
             if attempt < max_retries - 1:
@@ -311,13 +306,13 @@ def generate_weather_xml_weatherapi(data):
         root = ET.Element("adc_database")
 
         curr_node = ET.SubElement(root, "currentconditions")
-        
+
         temp_c = current.get('temp_c', 15)
         temp_f = int(c_to_f(temp_c))
         is_day = current.get('is_day', 1)
         condition = current.get('condition', {})
         code = condition.get('code', 1000)
-        
+
         ET.SubElement(curr_node, "temperature").text = str(temp_f)
         ET.SubElement(curr_node, "weathericon").text = str(weatherapi_to_accu_icon(code, is_day))
         ET.SubElement(curr_node, "weathertext").text = weatherapi_to_text(code)
@@ -325,38 +320,38 @@ def generate_weather_xml_weatherapi(data):
         ET.SubElement(curr_node, "isdaytime").text = "true" if is_day else "false"
 
         forecast_node = ET.SubElement(root, "forecast")
-        
+
         for day_data in forecast[:5]:
             day_node = ET.SubElement(forecast_node, "day")
             date = day_data.get('date', '')
             day_info = day_data.get('day', {})
-            
+
             ET.SubElement(day_node, "obsdate").text = date
-            
+
             max_c = day_info.get('maxtemp_c', 20)
             min_c = day_info.get('mintemp_c', 10)
             max_f = int(c_to_f(max_c))
             min_f = int(c_to_f(min_c))
-            
+
             ET.SubElement(day_node, "hightemperature").text = str(max_f)
             ET.SubElement(day_node, "lowtemperature").text = str(min_f)
-            
+
             day_condition = day_info.get('condition', {})
             day_code = day_condition.get('code', 1000)
-            
+
             ET.SubElement(day_node, "weathericon").text = str(weatherapi_to_accu_icon(day_code, 1))
             ET.SubElement(day_node, "weathertext").text = weatherapi_to_text(day_code)
 
         xml_str = ET.tostring(root, encoding='unicode')
         print(f"WeatherAPI XML: {len(xml_str)} bytes")
         return Response(xml_str, mimetype='application/xml')
-        
+
     except Exception as e:
         print(f"ERROR generando XML: {e}")
         raise
 
 def generate_fallback_xml():
-    fallback = f'''<?xml version="1.0"?>
+    fallback = """<?xml version="1.0"?>
 <adc_database>
     <currentconditions>
         <temperature>65</temperature>
@@ -365,7 +360,7 @@ def generate_fallback_xml():
         <humidity>50</humidity>
         <isdaytime>true</isdaytime>
     </currentconditions>
-</adc_database>'''
+</adc_database>"""
     return Response(fallback, mimetype='application/xml')
 
 @app.route('/')
@@ -376,4 +371,3 @@ def index():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-    
