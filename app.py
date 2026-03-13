@@ -148,13 +148,13 @@ def weather_data_legacy():
 
         cached_data = get_cached_weather(lat, lon)
         if cached_data:
-            return generate_weather_xml_weatherapi(cached_data)
+            return generate_weather_xml_weatherapi(cached_data, lat, lon)
 
         return fetch_weatherapi(lat, lon)
 
     except Exception as e:
         print(f"ERROR: {str(e)}")
-        return generate_fallback_xml()
+        return generate_fallback_xml(lat, lon)
 
 def fetch_weatherapi(lat, lon):
     params = {"key": WEATHERAPI_KEY, "q": f"{lat},{lon}", "days": 5, "aqi": "no", "alerts": "no"}
@@ -169,19 +169,27 @@ def fetch_weatherapi(lat, lon):
             resp.raise_for_status()
             data = resp.json()
             set_cached_weather(lat, lon, data)
-            return generate_weather_xml_weatherapi(data)
+            return generate_weather_xml_weatherapi(data, lat, lon)
         except Exception as e:
             if attempt < 2:
                 time.sleep(1)
                 continue
             raise
 
-def generate_weather_xml_weatherapi(data):
+def generate_weather_xml_weatherapi(data, lat, lon):
     try:
         current = data.get('current', {})
         forecast = data.get('forecast', {}).get('forecastday', [])
+        location = data.get('location', {})
 
-        xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<adc_database>', '  <currentconditions>']
+        # Build location key from lat/lon
+        lat_formatted = f"{lat:.6f}"
+        lon_formatted = f"{lon:.6f}"
+        lat_key = lat_formatted.replace('.', '_')
+        lon_key = lon_formatted.replace('.', '_')
+        safe_key = f"{lat_key}__{lon_key}"
+
+        xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<adc_database>', '  <CurrentConditions>']
 
         temp_c = current.get('temp_c', 15)
         temp_f = int(c_to_f(temp_c))
@@ -189,12 +197,17 @@ def generate_weather_xml_weatherapi(data):
         condition = current.get('condition', {})
         code = condition.get('code', 1000)
 
-        xml_parts.append(f'    <temperature>{temp_f}</temperature>')
-        xml_parts.append(f'    <weathericon>{weatherapi_to_accu_icon(code, is_day)}</weathericon>')
-        xml_parts.append(f'    <weathertext>{weatherapi_to_text(code)}</weathertext>')
-        xml_parts.append(f'    <humidity>{current.get("humidity", 50)}</humidity>')
-        xml_parts.append(f'    <isdaytime>{"true" if is_day else "false"}</isdaytime>')
-        xml_parts.append('  </currentconditions>')
+        # REQUIRED: City, State, Country, locationKey for TSF Shell
+        xml_parts.append(f'    <City>{location.get("name", "Unknown")}</City>')
+        xml_parts.append(f'    <State>{location.get("region", "")}</State>')
+        xml_parts.append(f'    <Country>{location.get("country", "XX")}</Country>')
+        xml_parts.append(f'    <locationKey>{safe_key}</locationKey>')
+        xml_parts.append(f'    <Temperature>{temp_f}</Temperature>')
+        xml_parts.append(f'    <WeatherIcon>{weatherapi_to_accu_icon(code, is_day)}</WeatherIcon>')
+        xml_parts.append(f'    <WeatherText>{weatherapi_to_text(code)}</WeatherText>')
+        xml_parts.append(f'    <Humidity>{current.get("humidity", 50)}</Humidity>')
+        xml_parts.append(f'    <IsDayTime>{"true" if is_day else "false"}</IsDayTime>')
+        xml_parts.append('  </CurrentConditions>')
         xml_parts.append('  <forecast>')
 
         for day_data in forecast[:5]:
@@ -224,16 +237,26 @@ def generate_weather_xml_weatherapi(data):
         print(f"ERROR: {e}")
         raise
 
-def generate_fallback_xml():
-    fallback = """<?xml version="1.0" encoding="UTF-8"?>
+def generate_fallback_xml(lat=-33.4489, lon=-70.6693):
+    lat_formatted = f"{lat:.6f}"
+    lon_formatted = f"{lon:.6f}"
+    lat_key = lat_formatted.replace('.', '_')
+    lon_key = lon_formatted.replace('.', '_')
+    safe_key = f"{lat_key}__{lon_key}"
+    
+    fallback = f"""<?xml version="1.0" encoding="UTF-8"?>
 <adc_database>
-  <currentconditions>
-    <temperature>65</temperature>
-    <weathericon>3</weathericon>
-    <weathertext>Service Temporarily Unavailable</weathertext>
-    <humidity>50</humidity>
-    <isdaytime>true</isdaytime>
-  </currentconditions>
+  <CurrentConditions>
+    <City>Santiago</City>
+    <State>Region Metropolitana</State>
+    <Country>Chile</Country>
+    <locationKey>{safe_key}</locationKey>
+    <Temperature>65</Temperature>
+    <WeatherIcon>3</WeatherIcon>
+    <WeatherText>Service Temporarily Unavailable</WeatherText>
+    <Humidity>50</Humidity>
+    <IsDayTime>true</IsDayTime>
+  </CurrentConditions>
 </adc_database>"""
     return Response(fallback, mimetype='application/xml')
 
@@ -244,3 +267,4 @@ def index():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
+    
