@@ -83,19 +83,15 @@ def city_find_legacy():
             lat = city.get('latitude', 0)
             lon = city.get('longitude', 0)
 
-            # Format exactly as expected by the APK
             lat_formatted = f"{lat:.6f}"
             lon_formatted = f"{lon:.6f}"
             lat_key = lat_formatted.replace('.', '_')
             lon_key = lon_formatted.replace('.', '_')
             safe_key = f"{lat_key}__{lon_key}"
 
-            # Get location name parts
             city_name = city.get("name", "Unknown")
             admin1 = city.get("admin1", "")
             country = city.get("country", "XX")
-            
-            # Use admin1 as state, fallback to country if empty
             state = admin1 if admin1 else country
 
             xml_parts.append('  <location>')
@@ -108,7 +104,7 @@ def city_find_legacy():
         xml_parts.append('</adc_database>')
         xml_str = '\n'.join(xml_parts)
 
-        print(f"CITY-FIND XML ({len(xml_str)} bytes): {xml_str[:200]}...")
+        print(f"CITY-FIND: {len(xml_str)} bytes for '{query}'")
         return Response(xml_str, mimetype='application/xml', content_type='application/xml; charset=UTF-8')
 
     except Exception as e:
@@ -122,12 +118,11 @@ def weather_data_legacy():
     lon_raw = request.args.get('slon')
     location_key = request.args.get('location') or request.args.get('locationKey')
 
-    print(f"WEATHER-DATA REQUEST: slat={lat_raw}, slon={lon_raw}, location={location_key}")
+    print(f"WEATHER-REQ: slat={lat_raw}, slon={lon_raw}, key={location_key}")
 
     try:
         lat, lon = None, None
 
-        # Try to parse location key first
         if location_key and location_key not in ['null', '', 'None']:
             key_clean = location_key.strip()
             if '__' in key_clean:
@@ -136,41 +131,32 @@ def weather_data_legacy():
                     if len(parts) == 2:
                         lat = float(parts[0].replace('_', '.'))
                         lon = float(parts[1].replace('_', '.'))
-                        print(f"Parsed locationKey: lat={lat}, lon={lon}")
-                except Exception as e:
-                    print(f"Failed to parse locationKey: {e}")
+                except:
+                    pass
 
-        # Fallback to slat/slon if location key didn't work
         if lat is None and lat_raw and lon_raw:
             if lat_raw not in ['null', '0.0', '0', ''] and lon_raw not in ['null', '0.0', '0', '']:
                 try:
                     lat = float(lat_raw)
                     lon = float(lon_raw)
-                    print(f"Using slat/slon: lat={lat}, lon={lon}")
                 except:
                     pass
 
-        # Default to Santiago if nothing worked
         if lat is None or lon is None:
             lat, lon = -33.4489, -70.6693
-            print(f"Using default coordinates: {lat}, {lon}")
 
-        # Check cache
         cached_data = get_cached_weather(lat, lon)
         if cached_data:
-            print("Using cached weather data")
-            return generate_weather_xml_weatherapi(cached_data, lat, lon)
+            return generate_weather_xml(cached_data, lat, lon)
 
         return fetch_weatherapi(lat, lon)
 
     except Exception as e:
-        print(f"WEATHER-DATA ERROR: {str(e)}")
-        traceback.print_exc()
+        print(f"WEATHER ERROR: {str(e)}")
         return generate_fallback_xml(lat, lon)
 
 def fetch_weatherapi(lat, lon):
     if not WEATHERAPI_KEY:
-        print("No WEATHERAPI_KEY set!")
         return generate_fallback_xml(lat, lon)
         
     params = {"key": WEATHERAPI_KEY, "q": f"{lat},{lon}", "days": 5, "aqi": "no", "alerts": "no"}
@@ -178,7 +164,6 @@ def fetch_weatherapi(lat, lon):
     for attempt in range(3):
         try:
             rate_limit()
-            print(f"Fetching WeatherAPI for {lat},{lon} (attempt {attempt+1})")
             resp = requests.get(WEATHERAPI_URL, params=params, timeout=10)
             if resp.status_code == 429:
                 time.sleep(2 * (attempt + 1))
@@ -186,21 +171,20 @@ def fetch_weatherapi(lat, lon):
             resp.raise_for_status()
             data = resp.json()
             set_cached_weather(lat, lon, data)
-            return generate_weather_xml_weatherapi(data, lat, lon)
+            return generate_weather_xml(data, lat, lon)
         except Exception as e:
-            print(f"WeatherAPI attempt {attempt+1} failed: {e}")
+            print(f"Fetch attempt {attempt+1} failed: {e}")
             if attempt < 2:
                 time.sleep(1)
                 continue
             return generate_fallback_xml(lat, lon)
 
-def generate_weather_xml_weatherapi(data, lat, lon):
+def generate_weather_xml(data, lat, lon):
     try:
         current = data.get('current', {})
         forecast = data.get('forecast', {}).get('forecastday', [])
         location = data.get('location', {})
 
-        # Build location key exactly as expected
         lat_formatted = f"{lat:.6f}"
         lon_formatted = f"{lon:.6f}"
         lat_key = lat_formatted.replace('.', '_')
@@ -210,8 +194,6 @@ def generate_weather_xml_weatherapi(data, lat, lon):
         city = location.get("name", "Unknown")
         state = location.get("region", "")
         country = location.get("country", "XX")
-        
-        # Ensure state is not empty
         if not state:
             state = country
 
@@ -225,12 +207,10 @@ def generate_weather_xml_weatherapi(data, lat, lon):
         humidity = current.get("humidity", 50)
         obs_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
-        # Build XML - EXACT format expected by TSF Shell
+        # LEGACY ACCUWEATHER XML FORMAT
         xml_parts = []
         xml_parts.append('<?xml version="1.0" encoding="UTF-8"?>')
         xml_parts.append('<adc_database>')
-        
-        # CurrentConditions section
         xml_parts.append('  <CurrentConditions>')
         xml_parts.append(f'    <City>{city}</City>')
         xml_parts.append(f'    <State>{state}</State>')
@@ -240,15 +220,14 @@ def generate_weather_xml_weatherapi(data, lat, lon):
         xml_parts.append(f'    <RealFeelTemperature>{temp_f}</RealFeelTemperature>')
         xml_parts.append(f'    <WeatherIcon>{weather_icon}</WeatherIcon>')
         xml_parts.append(f'    <WeatherText>{weather_text}</WeatherText>')
-        xml_parts.append(f'    <Humidity>{humidity}</Humidity>')
+        xml_parts.append(f'    <RelativeHumidity>{humidity}</RelativeHumidity>')
         xml_parts.append(f'    <IsDayTime>{"true" if is_day else "false"}</IsDayTime>')
         xml_parts.append(f'    <LocalObservationDateTime>{obs_time}</LocalObservationDateTime>')
         xml_parts.append(f'    <Latitude>{lat}</Latitude>')
         xml_parts.append(f'    <Longitude>{lon}</Longitude>')
         xml_parts.append('  </CurrentConditions>')
-        
-        # Forecast section
         xml_parts.append('  <forecast>')
+        
         for day_data in forecast[:5]:
             day_info = day_data.get('day', {})
             max_c = day_info.get('maxtemp_c', 20)
@@ -273,18 +252,12 @@ def generate_weather_xml_weatherapi(data, lat, lon):
         xml_parts.append('</adc_database>')
 
         xml_str = '\n'.join(xml_parts)
-        print(f"WEATHER XML ({len(xml_str)} bytes): {xml_str[:300]}...")
+        print(f"WEATHER: {len(xml_str)} bytes for {city}")
         
-        # Return with proper headers
-        return Response(
-            xml_str, 
-            mimetype='application/xml',
-            content_type='application/xml; charset=UTF-8'
-        )
+        return Response(xml_str, mimetype='application/xml', content_type='application/xml; charset=UTF-8')
 
     except Exception as e:
-        print(f"ERROR generating XML: {e}")
-        traceback.print_exc()
+        print(f"XML GEN ERROR: {e}")
         return generate_fallback_xml(lat, lon)
 
 def generate_fallback_xml(lat=-33.4489, lon=-70.6693):
@@ -295,7 +268,7 @@ def generate_fallback_xml(lat=-33.4489, lon=-70.6693):
     safe_key = f"{lat_key}__{lon_key}"
     obs_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     
-    xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <adc_database>
   <CurrentConditions>
     <City>Santiago</City>
@@ -306,20 +279,19 @@ def generate_fallback_xml(lat=-33.4489, lon=-70.6693):
     <RealFeelTemperature>65</RealFeelTemperature>
     <WeatherIcon>3</WeatherIcon>
     <WeatherText>Service Temporarily Unavailable</WeatherText>
-    <Humidity>50</Humidity>
+    <RelativeHumidity>50</RelativeHumidity>
     <IsDayTime>true</IsDayTime>
     <LocalObservationDateTime>{obs_time}</LocalObservationDateTime>
     <Latitude>{lat}</Latitude>
     <Longitude>{lon}</Longitude>
   </CurrentConditions>
-</adc_database>'''
+</adc_database>"""
     
-    print(f"FALLBACK XML ({len(xml)} bytes)")
     return Response(xml, mimetype='application/xml', content_type='application/xml; charset=UTF-8')
 
 @app.route('/')
 def index():
-    return "<h1>TSF Weather Server</h1><p>Endpoints:<br>/widget/androiddoes/city-find.asp<br>/widget/androiddoes/weather-data.asp</p>"
+    return "<h1>TSF Weather Server</h1><p>Legacy AccuWeather API Compatible</p>"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
