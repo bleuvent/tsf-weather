@@ -189,27 +189,43 @@ def generate_weather_xml_weatherapi(data, lat, lon):
         lon_key = lon_formatted.replace('.', '_')
         safe_key = f"{lat_key}__{lon_key}"
 
-        xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<adc_database>', '  <CurrentConditions>']
+        city = location.get("name", "Unknown")
+        state = location.get("region", "")
+        country = location.get("country", "XX")
 
         temp_c = current.get('temp_c', 15)
         temp_f = int(c_to_f(temp_c))
         is_day = current.get('is_day', 1)
         condition = current.get('condition', {})
         code = condition.get('code', 1000)
+        weather_text = weatherapi_to_text(code)
+        weather_icon = weatherapi_to_accu_icon(code, is_day)
+        humidity = current.get("humidity", 50)
+        obs_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
-        # REQUIRED: City, State, Country, locationKey for TSF Shell
-        xml_parts.append(f'    <City>{location.get("name", "Unknown")}</City>')
-        xml_parts.append(f'    <State>{location.get("region", "")}</State>')
-        xml_parts.append(f'    <Country>{location.get("country", "XX")}</Country>')
+        xml_parts = []
+        xml_parts.append('<?xml version="1.0" encoding="UTF-8"?>')
+        xml_parts.append('<adc_database>')
+        
+        # CurrentConditions with ALL possible fields TSF might expect
+        xml_parts.append('  <CurrentConditions>')
+        xml_parts.append(f'    <City>{city}</City>')
+        xml_parts.append(f'    <State>{state}</State>')
+        xml_parts.append(f'    <Country>{country}</Country>')
         xml_parts.append(f'    <locationKey>{safe_key}</locationKey>')
         xml_parts.append(f'    <Temperature>{temp_f}</Temperature>')
-        xml_parts.append(f'    <WeatherIcon>{weatherapi_to_accu_icon(code, is_day)}</WeatherIcon>')
-        xml_parts.append(f'    <WeatherText>{weatherapi_to_text(code)}</WeatherText>')
-        xml_parts.append(f'    <Humidity>{current.get("humidity", 50)}</Humidity>')
+        xml_parts.append(f'    <RealFeelTemperature>{temp_f}</RealFeelTemperature>')
+        xml_parts.append(f'    <WeatherIcon>{weather_icon}</WeatherIcon>')
+        xml_parts.append(f'    <WeatherText>{weather_text}</WeatherText>')
+        xml_parts.append(f'    <Humidity>{humidity}</Humidity>')
         xml_parts.append(f'    <IsDayTime>{"true" if is_day else "false"}</IsDayTime>')
+        xml_parts.append(f'    <LocalObservationDateTime>{obs_time}</LocalObservationDateTime>')
+        xml_parts.append(f'    <Latitude>{lat}</Latitude>')
+        xml_parts.append(f'    <Longitude>{lon}</Longitude>')
         xml_parts.append('  </CurrentConditions>')
+        
+        # Forecast
         xml_parts.append('  <forecast>')
-
         for day_data in forecast[:5]:
             day_info = day_data.get('day', {})
             max_c = day_info.get('maxtemp_c', 20)
@@ -218,23 +234,27 @@ def generate_weather_xml_weatherapi(data, lat, lon):
             min_f = int(c_to_f(min_c))
             day_condition = day_info.get('condition', {})
             day_code = day_condition.get('code', 1000)
+            day_text = weatherapi_to_text(day_code)
+            day_icon = weatherapi_to_accu_icon(day_code, 1)
+            date_str = day_data.get("date", "")
 
             xml_parts.append('    <day>')
-            xml_parts.append(f'      <obsdate>{day_data.get("date", "")}</obsdate>')
+            xml_parts.append(f'      <obsdate>{date_str}</obsdate>')
             xml_parts.append(f'      <hightemperature>{max_f}</hightemperature>')
             xml_parts.append(f'      <lowtemperature>{min_f}</lowtemperature>')
-            xml_parts.append(f'      <weathericon>{weatherapi_to_accu_icon(day_code, 1)}</weathericon>')
-            xml_parts.append(f'      <weathertext>{weatherapi_to_text(day_code)}</weathertext>')
+            xml_parts.append(f'      <weathericon>{day_icon}</weathericon>')
+            xml_parts.append(f'      <weathertext>{day_text}</weathertext>')
             xml_parts.append('    </day>')
 
         xml_parts.append('  </forecast>')
         xml_parts.append('</adc_database>')
 
         xml_str = '\n'.join(xml_parts)
+        print(f"Weather XML: {len(xml_str)} bytes for {city}")
         return Response(xml_str, mimetype='application/xml')
 
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"ERROR generating XML: {e}")
         raise
 
 def generate_fallback_xml(lat=-33.4489, lon=-70.6693):
@@ -243,6 +263,7 @@ def generate_fallback_xml(lat=-33.4489, lon=-70.6693):
     lat_key = lat_formatted.replace('.', '_')
     lon_key = lon_formatted.replace('.', '_')
     safe_key = f"{lat_key}__{lon_key}"
+    obs_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     
     fallback = f"""<?xml version="1.0" encoding="UTF-8"?>
 <adc_database>
@@ -252,10 +273,14 @@ def generate_fallback_xml(lat=-33.4489, lon=-70.6693):
     <Country>Chile</Country>
     <locationKey>{safe_key}</locationKey>
     <Temperature>65</Temperature>
+    <RealFeelTemperature>65</RealFeelTemperature>
     <WeatherIcon>3</WeatherIcon>
     <WeatherText>Service Temporarily Unavailable</WeatherText>
     <Humidity>50</Humidity>
     <IsDayTime>true</IsDayTime>
+    <LocalObservationDateTime>{obs_time}</LocalObservationDateTime>
+    <Latitude>{lat}</Latitude>
+    <Longitude>{lon}</Longitude>
   </CurrentConditions>
 </adc_database>"""
     return Response(fallback, mimetype='application/xml')
