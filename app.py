@@ -50,15 +50,101 @@ def rate_limit():
     LAST_REQUEST_TIME = time.time()
 
 def weatherapi_to_accu_icon(code, is_day=1):
-    day_map = {1000: 1, 1003: 3, 1006: 4, 1009: 4, 1030: 11, 1063: 12, 1066: 19, 1069: 19, 1072: 12, 1087: 15, 1114: 19, 1117: 21, 1135: 11, 1147: 11, 1150: 12, 1153: 12, 1168: 12, 1171: 14, 1180: 12, 1183: 13, 1186: 13, 1189: 14, 1192: 15, 1195: 15, 1198: 13, 1201: 15, 1204: 19, 1207: 20, 1210: 19, 1213: 20, 1216: 20, 1219: 21, 1222: 21, 1225: 21, 1237: 21, 1240: 12, 1243: 13, 1246: 15, 1249: 19, 1252: 20, 1255: 19, 1258: 20, 1261: 19, 1264: 21, 1273: 15, 1276: 16, 1279: 19, 1282: 21}
-    night_map = {1000: 33, 1003: 35, 1006: 36, 1009: 36}
+    """
+    Mapeo de códigos WeatherAPI a íconos AccuWeather (1-44)
+    Códigos AccuWeather: 1-4 (soleado a nublado), 5-8 (lluvia), etc.
+    """
+    # Día
+    day_map = {
+        1000: 1,   # Soleado / Despejado
+        1003: 3,   # Parcialmente nublado
+        1006: 6,   # Nublado (CORREGIDO - antes era 4, ahora 6 para mostrar nublado real)
+        1009: 7,   # Cubierto (CORREGIDO - antes era 4, ahora 7)
+        1030: 11,  # Neblina
+        1063: 12,  # Posible lluvia
+        1066: 19,  # Posible nieve
+        1069: 19,  # Posible aguanieve
+        1072: 12,  # Llovizna helada
+        1087: 15,  # Tormenta eléctrica
+        1114: 19,  # Nieve ventosa
+        1117: 21,  # Ventisca
+        1135: 11,  # Niebla
+        1147: 11,  # Niebla helada
+        1150: 12,  # Llovizna ligera
+        1153: 12,  # Llovizna
+        1168: 12,  # Llovizna helada
+        1171: 14,  # Llovizna fuerte helada
+        1180: 12,  # Lluvia ligera
+        1183: 13,  # Lluvia moderada
+        1186: 13,  # Lluvia moderada
+        1189: 14,  # Lluvia fuerte
+        1192: 15,  # Lluvia muy fuerte
+        1195: 15,  # Lluvia intensa
+        1198: 13,  # Lluvia helada ligera
+        1201: 15,  # Lluvia helada fuerte
+        1204: 19,  # Aguanieve ligera
+        1207: 20,  # Aguanieve fuerte
+        1210: 19,  # Nieve ligera
+        1213: 20,  # Nieve
+        1216: 20,  # Nieve moderada
+        1219: 21,  # Nieve fuerte
+        1222: 21,  # Nieve muy fuerte
+        1225: 21,  # Nieve intensa
+        1237: 21,  # Granizo
+        1240: 12,  # Chubasco ligero
+        1243: 13,  # Chubasco moderado
+        1246: 15,  # Chubasco fuerte
+        1249: 19,  # Chubasco de aguanieve ligero
+        1252: 20,  # Chubasco de aguanieve fuerte
+        1255: 19,  # Chubasco de nieve ligero
+        1258: 20,  # Chubasco de nieve fuerte
+        1261: 19,  # Chubasco de granizo ligero
+        1264: 21,  # Chubasco de granizo fuerte
+        1273: 15,  # Lluvia con tormenta ligera
+        1276: 16,  # Lluvia con tormenta
+        1279: 19,  # Nieve con tormenta ligera
+        1282: 21,  # Nieve con tormenta
+    }
+    
+    # Noche (33+ para íconos nocturnos)
+    night_map = {
+        1000: 33,  # Despejado noche
+        1003: 35,  # Parcialmente nublado noche
+        1006: 36,  # Nublado noche (CORREGIDO)
+        1009: 36,  # Cubierto noche (CORREGIDO)
+    }
+    
     if is_day:
         return day_map.get(code, 1)
     else:
         return night_map.get(code, day_map.get(code, 33))
 
 def weatherapi_to_text(code):
-    texts = {1000: "Despejado", 1003: "Parcialmente Nublado", 1006: "Nublado", 1009: "Cubierto", 1030: "Neblina", 1063: "Posible Lluvia", 1066: "Posible Nieve", 1087: "Tormenta Eléctrica", 1114: "Nieve Ventosa", 1117: "Ventisca", 1135: "Niebla", 1150: "Llovizna", 1183: "Lluvia Ligera", 1186: "Lluvia Moderada", 1189: "Lluvia", 1192: "Lluvia Fuerte", 1195: "Lluvia Intensa", 1210: "Nieve Ligera", 1213: "Nieve", 1219: "Nieve Moderada", 1225: "Nieve Fuerte", 1273: "Tormenta", 1276: "Tormenta Fuerte"}
+    texts = {
+        1000: "Despejado",
+        1003: "Parcialmente Nublado",
+        1006: "Nublado",
+        1009: "Cubierto",
+        1030: "Neblina",
+        1063: "Posible Lluvia",
+        1066: "Posible Nieve",
+        1087: "Tormenta Eléctrica",
+        1114: "Nieve Ventosa",
+        1117: "Ventisca",
+        1135: "Niebla",
+        1150: "Llovizna",
+        1183: "Lluvia Ligera",
+        1186: "Lluvia Moderada",
+        1189: "Lluvia",
+        1192: "Lluvia Fuerte",
+        1195: "Lluvia Intensa",
+        1210: "Nieve Ligera",
+        1213: "Nieve",
+        1219: "Nieve Moderada",
+        1225: "Nieve Fuerte",
+        1273: "Tormenta",
+        1276: "Tormenta Fuerte"
+    }
     return texts.get(code, "Despejado")
 
 @app.route('/widget/androiddoes/city-find.asp')
@@ -207,6 +293,9 @@ def generate_weather_xml(data, lat, lon):
         humidity = current.get("humidity", 50)
         obs_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
+        # DEBUG: Imprimir en logs qué está recibiendo y enviando
+        print(f"DEBUG: code={code}, is_day={is_day}, icon={weather_icon}, text={weather_text}")
+
         # LEGACY ACCUWEATHER XML FORMAT
         xml_parts = []
         xml_parts.append('<?xml version="1.0" encoding="UTF-8"?>')
@@ -252,7 +341,7 @@ def generate_weather_xml(data, lat, lon):
         xml_parts.append('</adc_database>')
 
         xml_str = '\n'.join(xml_parts)
-        print(f"WEATHER: {len(xml_str)} bytes for {city}")
+        print(f"WEATHER: {len(xml_str)} bytes for {city}, icon={weather_icon}")
         
         return Response(xml_str, mimetype='application/xml', content_type='application/xml; charset=UTF-8')
 
@@ -296,4 +385,4 @@ def index():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-             
+    
